@@ -1,0 +1,47 @@
+{
+  "name": "we-deploy",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "微信小程序自动化打包与发布平台",
+  "scripts": {
+    "dev": "vite",
+    "dev:server": "cd server && npx tsx watch src/index.ts",
+    "dev:all": "concurrently -n client,server -c cyan,green \"pnpm dev\" \"pnpm dev:server\"",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "lint": "eslint src --ext .ts,.tsx --fix",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css,less,json}\"",
+    "type-check": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^6.1.1",
+    "antd": "^6.3.5",
+    "axios": "^1.15.0",
+    "clsx": "^2.1.1",
+    "dayjs": "^1.11.20",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "react-router-dom": "^7.14.1",
+    "zustand": "^5.0.12"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@typescript-eslint/eslint-plugin": "^8.58.2",
+    "@typescript-eslint/parser": "^8.58.2",
+    "@vitejs/plugin-react": "^6.0.1",
+    "concurrently": "^9.2.1",
+    "eslint": "^10.2.0",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "less": "^4.6.4",
+    "prettier": "^3.8.2",
+    "typescript": "^6.0.2",
+    "vite": "^8.0.8"
+  }
+}

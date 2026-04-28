@@ -1,0 +1,105 @@
+.project-config-page {
+  &.loading {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 300px;
+  }
+
+  .page-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 24px;
+    padding: 24px;
+    background: var(--geek-bg-card);
+    border: 1px solid var(--geek-border-color);
+    border-radius: var(--geek-border-radius);
+
+    .header-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      .prompt {
+        font-family: var(--geek-font-mono);
+        font-size: 24px;
+        font-weight: 700;
+        color: var(--geek-accent-green);
+        text-shadow: 0 0 10px rgba(63, 185, 80, 0.5);
+      }
+      h1 {
+        margin: 0;
+        font-size: 24px;
+        font-weight: 700;
+        color: var(--geek-text-primary);
+      }
+      .project-id {
+        font-family: var(--geek-font-mono);
+        font-size: 14px;
+        color: var(--geek-accent-cyan);
+        background: rgba(57, 210, 192, 0.05);
+        padding: 4px 12px;
+        border-radius: 3px;
+        border: 1px solid rgba(57, 210, 192, 0.2);
+      }
+    }
+
+    .header-actions {
+      display: flex;
+      gap: 12px;
+    }
+
+    .geek-button {
+      background: var(--geek-accent-green);
+      border: 1px solid var(--geek-accent-green);
+      color: #000;
+      font-family: var(--geek-font-mono);
+      font-weight: 600;
+      &:hover {
+        background: #2ea043;
+        border-color: #2ea043;
+        box-shadow: var(--geek-glow-green);
+      }
+    }
+
+    .geek-button-outline {
+      background: transparent;
+      border: 1px solid var(--geek-border-color);
+      color: var(--geek-text-secondary);
+      font-family: var(--geek-font-mono);
+      &:hover {
+        border-color: var(--geek-accent-blue);
+        color: var(--geek-accent-blue);
+      }
+    }
+  }
+
+  .geek-card {
+    background: var(--geek-bg-card);
+    border: 1px solid var(--geek-border-color);
+    border-radius: var(--geek-border-radius);
+  }
+
+  .config-section {
+    max-width: 600px;
+    padding: 16px 0;
+  }
+
+  .test-btn {
+    font-family: var(--geek-font-mono);
+    background: var(--geek-bg-tertiary);
+    border-color: var(--geek-border-color);
+    color: var(--geek-text-secondary);
+    &:hover {
+      border-color: var(--geek-accent-blue);
+      color: var(--geek-accent-blue);
+    }
+  }
+
+  .geek-tabs {
+    :global(.ant-tabs-tab) {
+      font-family: var(--geek-font-mono);
+      font-size: 13px;
+    }
+  }
+}

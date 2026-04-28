@@ -1,0 +1,59 @@
+# 宿主机 nginx 反向代理示例（裸机部署场景）
+# 用法：
+#   cp deploy/nginx.conf.example /etc/nginx/conf.d/we-deploy.conf
+#   修改 server_name / 前端 dist 路径 / 后端端口 / 证书路径
+#   nginx -t && systemctl reload nginx
+#
+# Docker 部署不需要该文件，docker-compose 会用容器内的 nginx.docker.conf。
+
+server {
+    listen 80;
+    server_name we-deploy.example.com;
+
+    # 如有 https 证书，建议把 80 重定向到 443，并打开下方 listen 443 块
+    # return 301 https://$host$request_uri;
+
+    root  /opt/we-deploy/dist;
+    index index.html;
+
+    client_max_body_size 20m;
+
+    # SPA 单页路由
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    # 反代后端 API
+    location /api/ {
+        proxy_pass         http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+
+        proxy_read_timeout 600s;
+        proxy_send_timeout 600s;
+        client_max_body_size 20m;
+        proxy_buffering off;
+    }
+
+    gzip               on;
+    gzip_min_length    1k;
+    gzip_comp_level    6;
+    gzip_types         text/plain application/javascript application/json text/css image/svg+xml;
+    gzip_vary          on;
+}
+
+# ---- HTTPS 示例（推荐）----
+# server {
+#     listen 443 ssl http2;
+#     server_name we-deploy.example.com;
+#
+#     ssl_certificate     /etc/letsencrypt/live/we-deploy.example.com/fullchain.pem;
+#     ssl_certificate_key /etc/letsencrypt/live/we-deploy.example.com/privkey.pem;
+#     ssl_protocols       TLSv1.2 TLSv1.3;
+#     ssl_ciphers         ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
+#
+#     # …… 其余配置同 80 ……
+# }

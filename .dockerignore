@@ -1,0 +1,37 @@
+**/node_modules
+**/dist
+**/.cache
+**/.parcel-cache
+**/coverage
+**/.next
+**/.nuxt
+
+# 本地数据 / 沙盒 / 二维码缓存
+data/
+/tmp/we-deploy
+
+# Git / 编辑器 / 系统垃圾
+.git
+.gitignore
+.github
+.idea
+.vscode
+.DS_Store
+**/*.log
+.npm
+.pnpm-store
+
+# 本地环境敏感文件（不要打入镜像）
+.env
+.env.local
+.env.*.local
+
+# 测试 / 文档 / 大文件
+**/*.test.ts
+**/*.spec.ts
+docs/
+*.tgz
+
+# 已经在 stage 中拷贝过，二次拷贝会产生噪声
+Dockerfile
+docker-compose.yml

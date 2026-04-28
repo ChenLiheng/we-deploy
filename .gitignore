@@ -1,0 +1,48 @@
+# ==== Node ====
+node_modules/
+.pnpm-store/
+.npm/
+
+# ==== 构建产物 ====
+dist/
+build/
+*.tsbuildinfo
+
+# ==== 本地数据 / 沙盒 / 二维码 ====
+data/
+server/data/
+/tmp/we-deploy/
+
+# ==== 环境变量 ====
+.env
+.env.local
+.env.*.local
+
+# ==== 编辑器 / 系统垃圾 ====
+.vscode/
+.idea/
+.DS_Store
+*.swp
+*.swo
+
+# ==== AI / 开发工具本地配置 ====
+.claude/
+.cursor/
+
+# ==== 日志 ====
+*.log
+logs/
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+
+# ==== 测试 / 缓存 ====
+coverage/
+.cache/
+
+# ==== 大文件 / 离线包（不应入库）====
+*.tgz
+*.tar.gz
+
+# ==== 其它 ====
+.history/

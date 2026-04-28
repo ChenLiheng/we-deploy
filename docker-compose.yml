@@ -1,0 +1,55 @@
+# WeDeploy 一键启动编排
+# ------------------------------------------------------------
+# 用法：
+#   1) 复制示例环境变量：cp .env.example .env，按需调整
+#   2) 启动：             docker compose up -d --build
+#   3) 浏览器访问：       http://<server-ip>:${WE_DEPLOY_PORT:-8000}
+#   4) 默认管理员账号：   admin / admin123（首次启动后请立即修改）
+#
+# 数据持久化目录：./data —— 含 SQLite 数据库 / 二维码 / 临时沙盒。
+# 升级时直接 docker compose up -d --build 即可保留数据。
+# ------------------------------------------------------------
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api-runtime
+    image: we-deploy-api:latest
+    container_name: we-deploy-api
+    restart: unless-stopped
+    environment:
+      PORT: 8080
+      HOST: 0.0.0.0
+      DB_PATH: /data/we-deploy.db
+      SANDBOX_BASE: /data/sandbox
+      QRCODE_BASE: /data/qrcodes
+      # 如果业务仓库走 SSH，建议把宿主机 ~/.ssh 通过 volume 挂进来：
+      #   - ./ssh:/root/.ssh:ro
+    volumes:
+      - ./data:/data
+    expose:
+      - "8080"
+    networks:
+      - we-deploy-net
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: web-runtime
+    image: we-deploy-web:latest
+    container_name: we-deploy-web
+    restart: unless-stopped
+    ports:
+      # 默认对外端口 8000，可通过 .env 中的 WE_DEPLOY_PORT 覆盖
+      - "${WE_DEPLOY_PORT:-8000}:80"
+    depends_on:
+      - api
+    networks:
+      - we-deploy-net
+
+networks:
+  we-deploy-net:
+    driver: bridge
