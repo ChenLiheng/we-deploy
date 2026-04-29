@@ -8,6 +8,7 @@
     "build": "tsc --declaration false --rootDir src --outDir dist",
     "start": "tsx src/index.ts",
     "start:prod": "node dist/index.js",
+    "test": "tsx --test \"src/**/*.test.ts\"",
     "type-check": "tsc --noEmit --declaration false"
   },
   "dependencies": {
