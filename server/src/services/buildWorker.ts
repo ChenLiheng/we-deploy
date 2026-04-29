@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3'
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import { spawn } from 'child_process'
 import {
@@ -7,6 +8,7 @@ import {
   createGitClient,
   redactCredentials,
 } from '../utils/gitAuth.js'
+import { emitBuildLog, emitBuildStatus, type BuildLogEvent } from './buildEvents.js'
 
 /**
  * sandbox 根目录：所有 git clone 出来的临时代码、二维码图片都放在这里。
@@ -14,6 +16,51 @@ import {
  */
 const SANDBOX_BASE = process.env.SANDBOX_BASE || '/tmp/we-deploy/builds'
 const QRCODE_BASE = process.env.QRCODE_BASE || '/tmp/we-deploy/qrcodes'
+
+/**
+ * miniprogram-ci 编译/上传时会往 process.cwd() 下写 MD5 命名的临时目录。
+ * 必须把 cwd 迁到系统临时区，避免在项目目录（例如 server/）里落垃圾。
+ * CI_PROC_CWD 可覆盖；Windows 等非 POSIX 环境回落到 os.tmpdir()。
+ *
+ * process.chdir 是进程全局的；并发两个构建会导致 cwd 错乱，因此所有 CI API 必须通过
+ * runMiniProgramCiInScratch（内部串行队列）调用。
+ */
+function getCiScratchCwd(): string {
+  const fromEnv = process.env.CI_PROC_CWD?.trim()
+  if (fromEnv) return path.resolve(fromEnv)
+  if (process.platform === 'win32') {
+    return path.join(os.tmpdir(), 'we-deploy', 'ci-proc')
+  }
+  return '/tmp/we-deploy/ci-proc'
+}
+
+let ciInvokeChain: Promise<unknown> = Promise.resolve()
+
+/**
+ * 在独立 scratch 目录下执行 miniprogram-ci 相关工作，并与其他构建串行，避免 cwd 打架。
+ */
+function runMiniProgramCiInScratch<T>(work: () => Promise<T>): Promise<T> {
+  const run = ciInvokeChain.then(async (): Promise<T> => {
+    const scratch = getCiScratchCwd()
+    fs.mkdirSync(scratch, { recursive: true })
+    const prev = process.cwd()
+    process.chdir(scratch)
+    try {
+      return await work()
+    } finally {
+      try {
+        process.chdir(prev)
+      } catch {
+        process.chdir(scratch)
+      }
+    }
+  })
+  ciInvokeChain = run.then(
+    () => undefined,
+    () => undefined
+  )
+  return run
+}
 
 function generateId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).substring(2, 6)}`
@@ -80,24 +127,70 @@ interface EnvironmentEntry {
   }
 }
 
+/**
+ * 所有日志写入的唯一入口：写 db + 立刻 emit 到内存事件总线。
+ *
+ * 拆分两步而非合并：
+ *  1) db.prepare(...).run(...) 持久化（崩溃恢复 / 历史回看 / 兜底轮询都依赖这里）
+ *  2) emitBuildLog(...) 通知 SSE 订阅者实时推送
+ *
+ * 注意：better-sqlite3 是同步 API，emitBuildLog 也是同步触发监听器，
+ * 所以这两步之间没有 await 切换点，订阅方 timestamp 不会乱序。
+ */
+function insertLog(
+  db: Database.Database,
+  buildId: string,
+  level: BuildLogEvent['level'],
+  msg: string,
+  src: string
+): void {
+  const id = generateId('log')
+  const timestamp = Date.now()
+  db.prepare(
+    'INSERT INTO build_logs (id, build_id, timestamp, level, message, source) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(id, buildId, timestamp, level, msg, src)
+  emitBuildLog(buildId, { id, timestamp, level, message: msg, source: src })
+}
+
 function logInfo(db: Database.Database, buildId: string, msg: string, src: string) {
-  db.prepare('INSERT INTO build_logs (id, build_id, timestamp, level, message, source) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(generateId('log'), buildId, Date.now(), 'info', msg, src)
+  insertLog(db, buildId, 'info', msg, src)
 }
 
 function logSuccess(db: Database.Database, buildId: string, msg: string, src: string) {
-  db.prepare('INSERT INTO build_logs (id, build_id, timestamp, level, message, source) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(generateId('log'), buildId, Date.now(), 'success', msg, src)
+  insertLog(db, buildId, 'success', msg, src)
 }
 
 function logWarn(db: Database.Database, buildId: string, msg: string, src: string) {
-  db.prepare('INSERT INTO build_logs (id, build_id, timestamp, level, message, source) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(generateId('log'), buildId, Date.now(), 'warn', msg, src)
+  insertLog(db, buildId, 'warn', msg, src)
 }
 
 function logError(db: Database.Database, buildId: string, msg: string, src: string) {
-  db.prepare('INSERT INTO build_logs (id, build_id, timestamp, level, message, source) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(generateId('log'), buildId, Date.now(), 'error', msg, src)
+  insertLog(db, buildId, 'error', msg, src)
+}
+
+/**
+ * build 状态变更的唯一入口：UPDATE builds + 立刻广播状态事件。
+ *
+ * 替代之前散落在 startBuild / startPreview 各处的裸 prepare 调用，
+ * 保证每次状态变更都同时写库 + 通知 SSE 订阅者，不会漏。
+ */
+function setBuildStatus(db: Database.Database, buildId: string, status: string): void {
+  db.prepare('UPDATE builds SET status = ? WHERE id = ?').run(status, buildId)
+  emitBuildStatus(buildId, status)
+}
+
+function finishBuildStatus(
+  db: Database.Database,
+  buildId: string,
+  status: 'success' | 'failed',
+  endTime: string,
+  error?: string
+): void {
+  db.prepare('UPDATE builds SET status = ?, end_time = ? WHERE id = ?').run(status, endTime, buildId)
+  if (error) {
+    db.prepare('UPDATE builds SET error = ? WHERE id = ?').run(error, buildId)
+  }
+  emitBuildStatus(buildId, status, endTime, error)
 }
 
 /**
@@ -130,8 +223,9 @@ async function prepareCode(
 ): Promise<PreparedCode> {
   // 1. 优先使用本地项目路径（保留原有逻辑）；这种情况下不创建 sandbox，也禁止清理
   if (project.project_path && fs.existsSync(project.project_path)) {
-    logInfo(db, buildId, `使用本地项目路径: ${project.project_path}`, 'git')
-    return { codeRoot: project.project_path, sandboxRoot: null }
+    const codeRoot = path.resolve(project.project_path)
+    logInfo(db, buildId, `使用本地项目路径: ${codeRoot}`, 'git')
+    return { codeRoot, sandboxRoot: null }
   }
 
   if (!project.repo_url) {
@@ -209,21 +303,6 @@ interface StreamingOptions {
   maxLineLength?: number
 }
 
-/**
- * 单条日志写入复用：runStreaming 里高频调用，统一封装一次。
- */
-function insertLog(
-  db: Database.Database,
-  buildId: string,
-  level: 'info' | 'warn' | 'error' | 'success',
-  source: string,
-  message: string
-) {
-  db.prepare(
-    'INSERT INTO build_logs (id, build_id, timestamp, level, message, source) VALUES (?, ?, ?, ?, ?, ?)'
-  ).run(generateId('log'), buildId, Date.now(), level, message, source)
-}
-
 async function runStreaming(
   command: string,
   cwd: string,
@@ -283,7 +362,7 @@ async function runStreaming(
               raw.length > maxLineLength
                 ? raw.slice(0, maxLineLength) + ` ...[已截断 ${raw.length - maxLineLength} 字符]`
                 : raw
-            insertLog(db, buildId, level, source, line)
+            insertLog(db, buildId, level, line, source)
           }
         },
         flush() {
@@ -292,7 +371,7 @@ async function runStreaming(
               buf.length > maxLineLength
                 ? buf.slice(0, maxLineLength) + ` ...[已截断 ${buf.length - maxLineLength} 字符]`
                 : buf
-            insertLog(db, buildId, level, source, line)
+            insertLog(db, buildId, level, line, source)
             buf = ''
           }
         },
@@ -492,7 +571,8 @@ function resolveMiniprogramRoot(codeRoot: string, miniprogramRoot?: string): str
     )
   }
 
-  return targetPath
+  // 必须使用绝对路径：执行 CI 时会 chdir 到 /tmp，相对路径会失效
+  return path.resolve(targetPath)
 }
 
 /**
@@ -549,14 +629,13 @@ export async function startBuild(
   db: Database.Database,
   extra?: { version?: string; environment?: string; branch?: string }
 ) {
-  const updateStatus = db.prepare('UPDATE builds SET status = ? WHERE id = ?')
-  const finishBuild = db.prepare('UPDATE builds SET status = ?, end_time = ? WHERE id = ?')
   const updateIteration = db.prepare(
     'UPDATE iterations SET status = ?, updated_at = ? WHERE build_id = ?'
   )
 
   logInfo(db, buildId, '构建任务已启动', 'system')
-  updateStatus.run('cloning', buildId)
+  // setBuildStatus 会同时写库 + emit 给 SSE 订阅者，下方所有状态变更都走它
+  setBuildStatus(db, buildId, 'cloning')
 
   // 在最外层维护 sandboxRoot，保证 finally 一定能清理（即使 prepareCode 失败也会清掉空目录）
   let sandboxRoot: string | null = null
@@ -577,7 +656,7 @@ export async function startBuild(
     }
 
     // 安装依赖
-    updateStatus.run('installing', buildId)
+    setBuildStatus(db, buildId, 'installing')
     await installDependencies(codeRoot, buildId, db, {
       installCommand: env.installCommand,
       // 配置了 buildCommand 时（编译型框架）依赖必须装好，失败立即终止避免浪费时间
@@ -585,7 +664,7 @@ export async function startBuild(
     })
 
     // 执行编译命令（Taro/uni-app 等编译型框架必须）
-    updateStatus.run('building', buildId)
+    setBuildStatus(db, buildId, 'building')
     await runBuildCommand(codeRoot, env.buildCommand, buildId, db)
 
     // 解析 miniprogram-ci 真正使用的小程序根（codeRoot + miniprogramRoot）
@@ -600,55 +679,58 @@ export async function startBuild(
     logInfo(db, buildId, `准备上传: ${appId} v${version} robot=${robot} path=${projectPath}`, 'ci')
 
     const ci = await import('miniprogram-ci')
-    const projectObj = new ci.Project({
-      appid: appId,
-      type: 'miniProgram',
-      projectPath,
-      privateKey,
-      ignores: ['node_modules/**/*'],
-    })
-
-    // 可选：构建 npm（若使用了小程序 npm 包）
-    if (env.npmBuild) {
-      logInfo(db, buildId, '正在构建小程序 npm（packNpm）...', 'ci')
-      const warnings = await ci.packNpm(projectObj, {
-        ignores: ['pack_npm_ignore_list'],
-        reporter: () => undefined,
+    const uploadResult = await runMiniProgramCiInScratch(async () => {
+      const projectObj = new ci.Project({
+        appid: appId,
+        type: 'miniProgram',
+        projectPath,
+        privateKey,
+        ignores: ['node_modules/**/*'],
       })
-      if (Array.isArray(warnings) && warnings.length > 0) {
-        for (const w of warnings.slice(0, 10)) {
-          logWarn(db, buildId, `[packNpm] ${w?.msg || JSON.stringify(w)}`, 'ci')
-        }
-      }
-      logSuccess(db, buildId, 'npm 构建完成', 'ci')
-    }
 
-    updateStatus.run('uploading', buildId)
-    const result = await ci.upload({
-      project: projectObj,
-      version,
-      desc: `WeDeploy 自动构建 - ${extra?.environment || 'dev'}`,
-      robot,
-      setting: {
-        es6: setting.es6 !== false,
-        es7: setting.es7 !== false,
-        minify: setting.minify === true,
-        minifyJS: setting.minifyJS === true,
-        minifyWXML: setting.minifyWXML === true,
-        minifyWXSS: setting.minifyWXSS === true,
-        codeProtect: setting.codeProtect === true,
-      },
-      onProgressUpdate: (task) => {
-        const msg = typeof task === 'string' ? task : task.message
-        const id = typeof task === 'string' ? '' : task.id
-        if (msg) {
-          db.prepare('INSERT INTO build_logs (id, build_id, timestamp, level, message, source) VALUES (?, ?, ?, ?, ?, ?)')
-            .run(generateId('log'), buildId, Date.now(), 'info', `[${id}] ${msg}`, 'ci')
+      // 可选：构建 npm（若使用了小程序 npm 包）
+      if (env.npmBuild) {
+        logInfo(db, buildId, '正在构建小程序 npm（packNpm）...', 'ci')
+        const warnings = await ci.packNpm(projectObj, {
+          ignores: ['pack_npm_ignore_list'],
+          reporter: () => undefined,
+        })
+        if (Array.isArray(warnings) && warnings.length > 0) {
+          for (const w of warnings.slice(0, 10)) {
+            logWarn(db, buildId, `[packNpm] ${w?.msg || JSON.stringify(w)}`, 'ci')
+          }
         }
-      },
+        logSuccess(db, buildId, 'npm 构建完成', 'ci')
+      }
+
+      setBuildStatus(db, buildId, 'uploading')
+      return ci.upload({
+        project: projectObj,
+        version,
+        desc: `WeDeploy 自动构建 - ${extra?.environment || 'dev'}`,
+        robot,
+        setting: {
+          es6: setting.es6 !== false,
+          es7: setting.es7 !== false,
+          minify: setting.minify === true,
+          minifyJS: setting.minifyJS === true,
+          minifyWXML: setting.minifyWXML === true,
+          minifyWXSS: setting.minifyWXSS === true,
+          codeProtect: setting.codeProtect === true,
+        },
+        onProgressUpdate: (task) => {
+          const msg = typeof task === 'string' ? task : task.message
+          const tid = typeof task === 'string' ? '' : task.id
+          if (msg) {
+            // 走 insertLog 让 ci.upload 的进度也实时推到 SSE
+            insertLog(db, buildId, 'info', `[${tid}] ${msg}`, 'ci')
+          }
+        },
+      })
     })
 
     logSuccess(db, buildId, '上传成功！', 'ci')
+    const result = uploadResult
     if (result.subPackageInfo) {
       let totalSize = 0
       for (const pkg of result.subPackageInfo) {
@@ -659,14 +741,13 @@ export async function startBuild(
     }
 
     const endTime = new Date().toISOString()
-    finishBuild.run('success', endTime, buildId)
     logSuccess(db, buildId, '构建完成 ✓', 'system')
+    finishBuildStatus(db, buildId, 'success', endTime)
     updateIteration.run('active', endTime, buildId)
   } catch (err: any) {
     const endTime = new Date().toISOString()
-    finishBuild.run('failed', endTime, buildId)
-    db.prepare('UPDATE builds SET error = ? WHERE id = ?').run(err.message, buildId)
     logError(db, buildId, `构建失败: ${err.message}`, 'system')
+    finishBuildStatus(db, buildId, 'failed', endTime, err.message)
     updateIteration.run('active', endTime, buildId)
   } finally {
     // 无论成功/失败都清理 sandbox（仅清掉本次创建的临时目录），
@@ -681,11 +762,8 @@ export async function startPreview(
   db: Database.Database,
   extra?: { environment?: string; pagePath?: string; branch?: string }
 ) {
-  const updateStatus = db.prepare('UPDATE builds SET status = ? WHERE id = ?')
-  const finishBuild = db.prepare('UPDATE builds SET status = ?, end_time = ? WHERE id = ?')
-
   logInfo(db, buildId, '预览构建已启动', 'system')
-  updateStatus.run('cloning', buildId)
+  setBuildStatus(db, buildId, 'cloning')
 
   let sandboxRoot: string | null = null
 
@@ -703,13 +781,13 @@ export async function startPreview(
       throw new Error('未配置微信 CI 私钥')
     }
 
-    updateStatus.run('installing', buildId)
+    setBuildStatus(db, buildId, 'installing')
     await installDependencies(codeRoot, buildId, db, {
       installCommand: env.installCommand,
       failOnError: !!env.buildCommand?.trim(),
     })
 
-    updateStatus.run('building', buildId)
+    setBuildStatus(db, buildId, 'building')
     const build = db.prepare('SELECT * FROM builds WHERE id = ?').get(buildId) as any
 
     // 执行编译命令（如有）
@@ -722,36 +800,38 @@ export async function startPreview(
     fs.mkdirSync(path.dirname(qrcodeOutputDest), { recursive: true })
 
     const ci = await import('miniprogram-ci')
-    const projectObj = new ci.Project({
-      appid: project.app_id,
-      type: 'miniProgram',
-      projectPath,
-      privateKey,
-      ignores: ['node_modules/**/*'],
-    })
-
-    if (env.npmBuild) {
-      logInfo(db, buildId, '正在构建小程序 npm（packNpm）...', 'ci')
-      await ci.packNpm(projectObj, {
-        ignores: ['pack_npm_ignore_list'],
-        reporter: () => undefined,
+    const result = await runMiniProgramCiInScratch(async () => {
+      const projectObj = new ci.Project({
+        appid: project.app_id,
+        type: 'miniProgram',
+        projectPath,
+        privateKey,
+        ignores: ['node_modules/**/*'],
       })
-      logSuccess(db, buildId, 'npm 构建完成', 'ci')
-    }
 
-    updateStatus.run('uploading', buildId)
-    const result = await ci.preview({
-      project: projectObj,
-      version: build?.version || '1.0.0',
-      desc: `WeDeploy 预览 - ${extra?.environment || 'dev'}`,
-      robot: envConfig.robot || 1,
-      qrcodeFormat: 'image',
-      qrcodeOutputDest,
-      pagePath: extra?.pagePath,
-      setting: {
-        es6: true,
-        es7: true,
-      },
+      if (env.npmBuild) {
+        logInfo(db, buildId, '正在构建小程序 npm（packNpm）...', 'ci')
+        await ci.packNpm(projectObj, {
+          ignores: ['pack_npm_ignore_list'],
+          reporter: () => undefined,
+        })
+        logSuccess(db, buildId, 'npm 构建完成', 'ci')
+      }
+
+      setBuildStatus(db, buildId, 'uploading')
+      return ci.preview({
+        project: projectObj,
+        version: build?.version || '1.0.0',
+        desc: `WeDeploy 预览 - ${extra?.environment || 'dev'}`,
+        robot: envConfig.robot || 1,
+        qrcodeFormat: 'image',
+        qrcodeOutputDest,
+        pagePath: extra?.pagePath,
+        setting: {
+          es6: true,
+          es7: true,
+        },
+      })
     })
 
     db.prepare('UPDATE builds SET description = ? WHERE id = ?')
@@ -765,13 +845,12 @@ export async function startPreview(
     }
 
     const endTime = new Date().toISOString()
-    finishBuild.run('success', endTime, buildId)
     logSuccess(db, buildId, '预览构建完成 ✓', 'system')
+    finishBuildStatus(db, buildId, 'success', endTime)
   } catch (err: any) {
     const endTime = new Date().toISOString()
-    finishBuild.run('failed', endTime, buildId)
-    db.prepare('UPDATE builds SET error = ? WHERE id = ?').run(err.message, buildId)
     logError(db, buildId, `预览构建失败: ${err.message}`, 'system')
+    finishBuildStatus(db, buildId, 'failed', endTime, err.message)
   } finally {
     // 预览构建结束后同样清理 sandbox 代码目录（二维码图片不在 sandboxRoot 下，不会被误删）
     cleanupSandbox(sandboxRoot, buildId, db)

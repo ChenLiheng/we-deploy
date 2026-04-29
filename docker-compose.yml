@@ -25,7 +25,8 @@ services:
       DB_PATH: /data/we-deploy.db
       SANDBOX_BASE: /data/sandbox
       QRCODE_BASE: /data/qrcodes
-      # 如果业务仓库走 SSH，建议把宿主机 ~/.ssh 通过 volume 挂进来：
+      # miniprogram-ci 进程 cwd 落点，避免在项目目录写入临时文件
+      # CI_PROC_CWD: /tmp/we-deploy/ci-proc
       #   - ./ssh:/root/.ssh:ro
     volumes:
       - ./data:/data

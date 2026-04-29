@@ -23,6 +23,7 @@ import {
   SyncOutlined,
   CheckCircleOutlined,
   ClockCircleOutlined,
+  EyeOutlined,
 } from '@ant-design/icons'
 import { useIterationStore } from '@stores/iterationStore'
 import { useProjectStore } from '@stores/projectStore'
@@ -58,6 +59,7 @@ const Iterations: React.FC = () => {
   const [form] = Form.useForm()
   const [selectedProjectId, setSelectedProjectId] = useState<string>('')
   const [drawerBuildId, setDrawerBuildId] = useState<string | null>(null)
+  const [drawerProjectId, setDrawerProjectId] = useState<string | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
 
   useEffect(() => {
@@ -95,10 +97,11 @@ const Iterations: React.FC = () => {
   }, [form, createIteration])
 
   const handleTriggerBuild = useCallback(
-    async (id: string) => {
+    async (iter: Iteration) => {
       try {
-        const buildId = await triggerBuild(id)
+        const buildId = await triggerBuild(iter.id)
         setDrawerBuildId(buildId)
+        setDrawerProjectId(iter.projectId)
         setDrawerOpen(true)
       } catch {
         message.error('构建触发失败')
@@ -106,6 +109,17 @@ const Iterations: React.FC = () => {
     },
     [triggerBuild],
   )
+
+  /**
+   * 关闭后再次打开抽屉，查看该迭代当前 / 最近一次构建的日志。
+   * 与"触发构建"等价的入口：用 iteration.buildId 复用同一个抽屉。
+   */
+  const handleViewLogs = useCallback((iter: Iteration) => {
+    if (!iter.buildId) return
+    setDrawerBuildId(iter.buildId)
+    setDrawerProjectId(iter.projectId)
+    setDrawerOpen(true)
+  }, [])
 
   const handleClose = useCallback(
     async (id: string) => {
@@ -211,7 +225,7 @@ const Iterations: React.FC = () => {
     {
       title: '操作',
       key: 'actions',
-      width: 140,
+      width: 180,
       align: 'center',
       fixed: 'right',
       render: (_: unknown, record: Iteration) => (
@@ -222,7 +236,19 @@ const Iterations: React.FC = () => {
                 type="text"
                 icon={<PlayCircleOutlined />}
                 className="action-btn build"
-                onClick={() => handleTriggerBuild(record.id)}
+                onClick={() => handleTriggerBuild(record)}
+              />
+            </Tooltip>
+          )}
+          {/* 只要这条迭代曾经触发过构建（无论成功/失败/进行中），都允许重新打开抽屉
+              查看日志：解决了之前关闭抽屉后只能去构建历史才能再看日志的问题 */}
+          {record.buildId && (
+            <Tooltip title="查看构建日志">
+              <Button
+                type="text"
+                icon={<EyeOutlined />}
+                className="action-btn"
+                onClick={() => handleViewLogs(record)}
               />
             </Tooltip>
           )}
@@ -355,6 +381,7 @@ const Iterations: React.FC = () => {
 
       <BuildDrawer
         buildId={drawerBuildId}
+        projectId={drawerProjectId || undefined}
         visible={drawerOpen}
         onClose={() => setDrawerOpen(false)}
       />

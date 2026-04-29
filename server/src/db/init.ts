@@ -74,6 +74,8 @@ export function initDatabase(dbPath?: string): Database.Database {
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
 
+    CREATE INDEX IF NOT EXISTS idx_builds_start_time ON builds (start_time);
+
     CREATE TABLE IF NOT EXISTS build_logs (
       id            TEXT PRIMARY KEY,
       build_id      TEXT NOT NULL,

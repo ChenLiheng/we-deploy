@@ -23,6 +23,8 @@ Environment=HOST=0.0.0.0
 Environment=DB_PATH=@DATA_DIR@/we-deploy.db
 Environment=SANDBOX_BASE=@DATA_DIR@/sandbox
 Environment=QRCODE_BASE=@DATA_DIR@/qrcodes
+# 构建记录与日志保留（天），默认 30；设为 0 关闭自动清理：
+# Environment=LOG_RETENTION_DAYS=30
 
 ExecStart=/usr/bin/node @INSTALL_DIR@/server/dist/index.js
 

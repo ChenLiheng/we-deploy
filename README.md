@@ -29,16 +29,18 @@
 
 ## 截图
 
-> 截图占位，欢迎贡献。建议覆盖：项目列表 / 项目配置 / 迭代管理 / 构建控制台 / 构建历史。
+![WeDeploy 控制台仪表盘：系统概览、项目统计与已配置项目](./assets/images/dashboard.png)
+
+> 更多界面（项目配置 / 迭代管理 / 构建控制台 / 构建历史等）欢迎提交 PR 补充截图。
 
 ## 技术栈
 
-| 层 | 选型 |
-| --- | --- |
-| 前端 | React 19、Vite、Ant Design 6、Zustand、React Router 7 |
+| 层   | 选型                                                              |
+| ---- | ----------------------------------------------------------------- |
+| 前端 | React 19、Vite、Ant Design 6、Zustand、React Router 7             |
 | 后端 | Node.js ≥ 20、Express、better-sqlite3、simple-git、miniprogram-ci |
-| 构建 | TypeScript、Less、pnpm、tsx |
-| 部署 | Docker、docker-compose、systemd、nginx |
+| 构建 | TypeScript、Less、pnpm、tsx                                       |
+| 部署 | Docker、docker-compose、systemd、nginx                            |
 
 ## 快速开始（本地开发）
 
@@ -67,17 +69,17 @@ open http://localhost:5173
 
 进入「项目管理 → 项目配置」即可填写：
 
-| 字段 | 说明 |
-| --- | --- |
-| 仓库地址 | 必填，HTTPS 或 SSH，例 `https://github.com/xxx/yyy.git` |
-| 默认分支 | 缺省分支；迭代上的分支会优先生效 |
-| 认证方式 | `token`（HTTPS）/ `ssh` |
-| Access Token | Token 仅落库，保存后不再返回前端，置空表示不修改 |
-| **编译命令** | 编译型框架必填，例 `npm run build:weapp` |
-| **小程序根目录** | 编译产物路径（含 `project.config.json`），例 `dist/weapp` |
-| **构建小程序 npm** | 项目使用了小程序 npm 包时打开（即微信工具的「构建 npm」） |
-| 微信 CI 私钥 | 在微信公众平台「开发管理 → 开发设置 → 小程序代码上传」生成 |
-| dev / prod 环境 | 机器人编号、ES6/ES7/Minify 等编译开关 |
+| 字段               | 说明                                                       |
+| ------------------ | ---------------------------------------------------------- |
+| 仓库地址           | 必填，HTTPS 或 SSH，例 `https://github.com/xxx/yyy.git`    |
+| 默认分支           | 缺省分支；迭代上的分支会优先生效                           |
+| 认证方式           | `token`（HTTPS）/ `ssh`                                    |
+| Access Token       | Token 仅落库，保存后不再返回前端，置空表示不修改           |
+| **编译命令**       | 编译型框架必填，例 `npm run build:weapp`                   |
+| **小程序根目录**   | 编译产物路径（含 `project.config.json`），例 `dist/weapp`  |
+| **构建小程序 npm** | 项目使用了小程序 npm 包时打开（即微信工具的「构建 npm」）  |
+| 微信 CI 私钥       | 在微信公众平台「开发管理 → 开发设置 → 小程序代码上传」生成 |
+| dev / prod 环境    | 机器人编号、ES6/ES7/Minify 等编译开关                      |
 
 构建任务会按以下流程执行：
 
@@ -104,14 +106,16 @@ docker compose up -d --build
 
 容器内部环境变量（详见 `Dockerfile`）：
 
-| 变量 | 默认值 | 说明 |
-| --- | --- | --- |
-| `PORT` | 8080 | 后端监听端口（容器内） |
-| `HOST` | 0.0.0.0 | 后端绑定地址 |
-| `DB_PATH` | /data/we-deploy.db | SQLite 数据库路径 |
-| `SANDBOX_BASE` | /data/sandbox | git clone 临时目录 |
-| `QRCODE_BASE` | /data/qrcodes | 预览二维码保存目录 |
-| `WE_DEPLOY_PORT` | 8000 | web 容器对外暴露端口（仅 docker-compose.yml 中使用） |
+| 变量                 | 默认值             | 说明                                                                                                    |
+| -------------------- | ------------------ | ------------------------------------------------------------------------------------------------------- |
+| `PORT`               | 8080               | 后端监听端口（容器内）                                                                                  |
+| `HOST`               | 0.0.0.0            | 后端绑定地址                                                                                            |
+| `DB_PATH`            | /data/we-deploy.db | SQLite 数据库路径                                                                                       |
+| `SANDBOX_BASE`       | /data/sandbox      | git clone 临时目录                                                                                      |
+| `QRCODE_BASE`        | /data/qrcodes      | 预览二维码保存目录                                                                                      |
+| `CI_PROC_CWD`       | /tmp/we-deploy/ci-proc | miniprogram-ci 执行时的进程工作目录，其临时/缓存文件写入此处，避免落在项目代码目录                                                |
+| `LOG_RETENTION_DAYS` | 30                 | 构建记录与控制台日志保留天数；早于该阈值的 `builds` 及关联 `build_logs` 会被删除；设为 `0` 关闭自动清理 |
+| `WE_DEPLOY_PORT`     | 8000               | web 容器对外暴露端口（仅 docker-compose.yml 中使用）                                                    |
 
 ## Linux 裸机部署
 
@@ -143,19 +147,19 @@ journalctl -u we-deploy -f
 
 ## API 速览
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| `POST` | `/api/auth/login` | 登录，返回 JWT |
-| `GET`  | `/api/projects` | 列出项目 |
-| `POST` | `/api/projects` | 创建项目 |
-| `PUT`  | `/api/projects/:id` | 更新项目 |
-| `POST` | `/api/git/test-connection` | 测试仓库连通性（自动注入 token） |
-| `POST` | `/api/git/branches` | 列出远端分支 |
-| `POST` | `/api/iterations` | 创建迭代 |
-| `POST` | `/api/iterations/:id/build` | 触发构建（异步） |
-| `GET`  | `/api/builds/:id/logs` | 拉取构建日志 |
-| `POST` | `/api/builds/:id/preview` | 触发预览构建（生成二维码） |
-| `GET`  | `/api/builds/:id/qrcode` | 获取预览二维码图片 |
+| 方法   | 路径                        | 说明                             |
+| ------ | --------------------------- | -------------------------------- |
+| `POST` | `/api/auth/login`           | 登录，返回 JWT                   |
+| `GET`  | `/api/projects`             | 列出项目                         |
+| `POST` | `/api/projects`             | 创建项目                         |
+| `PUT`  | `/api/projects/:id`         | 更新项目                         |
+| `POST` | `/api/git/test-connection`  | 测试仓库连通性（自动注入 token） |
+| `POST` | `/api/git/branches`         | 列出远端分支                     |
+| `POST` | `/api/iterations`           | 创建迭代                         |
+| `POST` | `/api/iterations/:id/build` | 触发构建（异步）                 |
+| `GET`  | `/api/builds/:id/logs`      | 拉取构建日志                     |
+| `POST` | `/api/builds/:id/preview`   | 触发预览构建（生成二维码）       |
+| `GET`  | `/api/builds/:id/qrcode`    | 获取预览二维码图片               |
 
 详见 `server/src/routes/`。
 

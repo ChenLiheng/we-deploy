@@ -10,6 +10,11 @@ import settingsRoutes from './routes/settings.js'
 import gitRoutes from './routes/git.js'
 import ciRoutes from './routes/ci.js'
 import authRoutes from './routes/auth.js'
+import {
+  runBuildRetentionCleanup,
+  startBuildRetentionScheduler,
+  getLogRetentionDays,
+} from './services/buildRetention.js'
 
 const app = express()
 // 端口与数据库路径都从环境变量读取，便于 Docker / systemd 部署时覆盖默认值；
@@ -69,6 +74,17 @@ if (orphanResult.changes > 0) {
   orphanIterationStmt.run(startupTs)
   console.log(`✓ 已清理 ${orphanResult.changes} 条孤儿构建（服务重启所致）`)
 }
+
+// 构建记录 + 日志保留（默认 30 天，可通过 LOG_RETENTION_DAYS 调整；设为 0 关闭）
+const retention = runBuildRetentionCleanup(db)
+if (getLogRetentionDays() === 0) {
+  console.log('ℹ LOG_RETENTION_DAYS=0：已关闭构建记录/日志自动清理')
+} else if (retention.ran && retention.deletedBuilds > 0) {
+  console.log(
+    `✓ 构建保留策略：删除 ${retention.deletedBuilds} 条早于 ${retention.cutoffIso} 的构建及关联日志（已清空 ${retention.clearedIterationRefs} 条迭代的 build_id 引用）`
+  )
+}
+startBuildRetentionScheduler(db, { runImmediately: false })
 
 // Seed admin user if no users exist
 const userCount = (db.prepare('SELECT COUNT(*) as count FROM users').get() as any).count

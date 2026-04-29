@@ -35,7 +35,7 @@ const levelColorMap: Record<string, string> = {
 
 const BuildConsole: React.FC = () => {
   const { buildId } = useParams<{ projectId: string; buildId: string }>()
-  const { currentBuild, logs, status, fetchBuild, fetchBuildLogs, clearConsole } =
+  const { currentBuild, logs, status, transport, fetchBuild, clearConsole } =
     useBuildConsoleStore()
   const consoleEndRef = useRef<HTMLDivElement>(null)
   const [previewing, setPreviewing] = useState(false)
@@ -60,22 +60,12 @@ const BuildConsole: React.FC = () => {
     // 导致首次拉取走错增量分支、漏掉早期日志
     clearConsole()
     fetchBuild(buildId)
-    fetchBuildLogs(buildId)
-  }, [buildId, fetchBuild, fetchBuildLogs, clearConsole])
 
-  // 轮询 logs：终态后停止，避免对已结束的 build 持续打无意义请求
-  useEffect(() => {
-    if (!buildId) return
-    if (status === 'success' || status === 'failed') return
-
-    const interval = setInterval(() => {
-      const state = useBuildConsoleStore.getState()
-      state.fetchBuildLogs(buildId)
-      state.fetchBuild(buildId)
-    }, 2000)
-
-    return () => clearInterval(interval)
-  }, [buildId, status])
+    // 启动实时日志通道：SSE 优先，失败自动降级到 2s 轮询
+    // connectStream 内部已经做了首次全量拉取，无需再单独 fetchBuildLogs
+    const disconnect = useBuildConsoleStore.getState().connectStream(buildId)
+    return () => disconnect()
+  }, [buildId, fetchBuild, clearConsole])
 
   useEffect(() => {
     consoleEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -96,6 +86,27 @@ const BuildConsole: React.FC = () => {
           >
             {currentStatus.icon} {currentStatus.text}
           </Tag>
+          {/* 日志通道角标：用极简样式提示当前是 SSE 还是降级轮询 */}
+          {transport !== 'idle' && (
+            <Tag
+              className="transport-tag"
+              style={{
+                marginLeft: 4,
+                fontFamily: 'var(--geek-font-mono)',
+                fontSize: 10,
+                color:
+                  transport === 'sse'
+                    ? 'var(--geek-accent-green)'
+                    : 'var(--geek-accent-yellow)',
+                borderColor:
+                  transport === 'sse'
+                    ? 'var(--geek-accent-green)'
+                    : 'var(--geek-accent-yellow)',
+              }}
+            >
+              {transport === 'sse' ? 'STREAM' : 'POLLING'}
+            </Tag>
+          )}
         </div>
         <Space>
           {status === 'success' && currentBuild?.qrcodeUrl && (
@@ -121,10 +132,11 @@ const BuildConsole: React.FC = () => {
             icon={<ReloadOutlined />}
             className="geek-button"
             onClick={() => {
-              if (buildId) {
-                fetchBuild(buildId)
-                fetchBuildLogs(buildId)
-              }
+              // 刷新：清空 + 重新连接（自动重新走 SSE，断线后切换通道也用这个）
+              if (!buildId) return
+              clearConsole()
+              fetchBuild(buildId)
+              useBuildConsoleStore.getState().connectStream(buildId)
             }}
           >
             刷新
