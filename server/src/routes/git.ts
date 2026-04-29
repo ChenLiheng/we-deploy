@@ -1,6 +1,5 @@
 import { Router, Request, Response } from 'express'
 import { simpleGit } from 'simple-git'
-import fs from 'fs'
 import { getDb } from '../db/init.js'
 import {
   buildAuthenticatedRepoUrl,
@@ -95,62 +94,6 @@ router.post('/branches', async (req: Request, res: Response) => {
     res.json({ branches })
   } catch {
     res.json({ branches: [] })
-  }
-})
-
-// POST /api/git/clone
-router.post('/clone', async (req: Request, res: Response) => {
-  const { repoUrl, branch, authToken, authType, sshKeyPath, destPath, projectId } = req.body
-
-  if (!repoUrl) {
-    res.status(400).json({ error: '仓库地址不能为空' })
-    return
-  }
-
-  let url = repoUrl
-  if (authType !== 'ssh') {
-    // 优先使用入参 token；否则按 projectId 走 DB 查询
-    const token = authToken || getToken({ body: { projectId } } as Request)
-    url = buildRepoUrl(repoUrl, token)
-  }
-
-  const cloneDest = destPath || `/tmp/we-deploy/builds/${Date.now()}`
-  fs.mkdirSync(cloneDest, { recursive: true })
-
-  try {
-    const client = gitWithOpts(authType === 'ssh' ? sshKeyPath : undefined)
-    await client.clone(url, cloneDest, ['--branch', branch || 'main', '--depth', '1'])
-    res.json({ destPath: cloneDest })
-  } catch (err: any) {
-    const message = redactCredentials(String(err?.message || err))
-    res.status(500).json({ error: `Git 克隆失败: ${message}` })
-  }
-})
-
-// GET /api/git/commit
-router.get('/commit', async (req: Request, res: Response) => {
-  const repoPath = req.query.repoPath as string
-
-  if (!repoPath || !fs.existsSync(repoPath)) {
-    res.json({ hash: '', message: '', author: '', date: '' })
-    return
-  }
-
-  try {
-    const git = simpleGit(repoPath)
-    const log = await git.log(['-1'])
-    if (log.latest) {
-      res.json({
-        hash: log.latest.hash,
-        message: log.latest.message,
-        author: log.latest.author_name,
-        date: log.latest.date,
-      })
-    } else {
-      res.json({ hash: '', message: '', author: '', date: '' })
-    }
-  } catch {
-    res.json({ hash: '', message: '', author: '', date: '' })
   }
 })
 
