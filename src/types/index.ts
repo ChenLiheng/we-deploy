@@ -20,6 +20,7 @@ export interface ProjectConfig {
   authType: GitAuthType
   authToken?: string
   hasAuthToken?: boolean
+  hasPrivateKey?: boolean
   sshKeyPath?: string
   projectPath?: string
   environments: {

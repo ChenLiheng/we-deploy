@@ -1,5 +1,6 @@
 import { Router, Request, Response } from 'express'
 import { getDb } from '../db/init.js'
+import { encryptSecret } from '../utils/secretVault.js'
 
 const router = Router()
 
@@ -12,12 +13,55 @@ const DEFAULT_ENVIRONMENTS = JSON.stringify({
   prod: { robot: 2, setting: { es6: true, es7: true, minify: true } },
 })
 
-// GET /api/projects
-router.get('/', (_req: Request, res: Response) => {
-  const db = getDb()
-  const rows = db.prepare('SELECT * FROM projects ORDER BY updated_at DESC').all() as any[]
+function parseEnvironments(raw: string): Record<string, any> {
+  try {
+    return JSON.parse(raw || '{}')
+  } catch {
+    return {}
+  }
+}
 
-  const projects = rows.map(row => ({
+function encryptEnvironmentSecrets(environments: any, existingRaw?: string): string {
+  const next = { ...(environments || {}) }
+  const existing = parseEnvironments(existingRaw || '{}')
+
+  if (next.private_key) {
+    next.private_key = encryptSecret(next.private_key)
+  } else if (existing.private_key) {
+    next.private_key = existing.private_key
+  } else {
+    delete next.private_key
+  }
+
+  for (const envName of ['dev', 'prod']) {
+    if (next[envName]?.private_key) {
+      next[envName] = {
+        ...next[envName],
+        private_key: encryptSecret(next[envName].private_key),
+      }
+    } else if (existing[envName]?.private_key) {
+      next[envName] = {
+        ...(next[envName] || {}),
+        private_key: existing[envName].private_key,
+      }
+    }
+  }
+
+  return JSON.stringify(next)
+}
+
+function toProjectResponse(row: any) {
+  const environments = parseEnvironments(row.environments)
+  const hasPrivateKey = !!(
+    environments.private_key ||
+    environments.dev?.private_key ||
+    environments.prod?.private_key
+  )
+  delete environments.private_key
+  if (environments.dev) delete environments.dev.private_key
+  if (environments.prod) delete environments.prod.private_key
+
+  return {
     id: row.id,
     name: row.name,
     description: row.description || undefined,
@@ -28,10 +72,19 @@ router.get('/', (_req: Request, res: Response) => {
     hasAuthToken: !!row.auth_token,
     sshKeyPath: row.ssh_key_path || undefined,
     projectPath: row.project_path || undefined,
-    environments: JSON.parse(row.environments || '{}'),
+    hasPrivateKey,
+    environments,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-  }))
+  }
+}
+
+// GET /api/projects
+router.get('/', (_req: Request, res: Response) => {
+  const db = getDb()
+  const rows = db.prepare('SELECT * FROM projects ORDER BY updated_at DESC').all() as any[]
+
+  const projects = rows.map(toProjectResponse)
 
   res.json(projects)
 })
@@ -46,21 +99,7 @@ router.get('/:id', (req: Request, res: Response) => {
     return
   }
 
-  res.json({
-    id: row.id,
-    name: row.name,
-    description: row.description || undefined,
-    appId: row.app_id,
-    repoUrl: row.repo_url,
-    branch: row.branch,
-    authType: row.auth_type,
-    hasAuthToken: !!row.auth_token,
-    sshKeyPath: row.ssh_key_path || undefined,
-    projectPath: row.project_path || undefined,
-    environments: JSON.parse(row.environments || '{}'),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  })
+  res.json(toProjectResponse(row))
 })
 
 // POST /api/projects
@@ -75,28 +114,16 @@ router.post('/', (req: Request, res: Response) => {
 
   const id = generateId('proj')
   const now = new Date().toISOString()
-  const envs = environments ? JSON.stringify(environments) : DEFAULT_ENVIRONMENTS
+  const envs = environments ? encryptEnvironmentSecrets(environments) : DEFAULT_ENVIRONMENTS
 
   db.prepare(`
     INSERT INTO projects (id, name, description, app_id, repo_url, branch, auth_type, auth_token, project_path, environments, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(id, name, description || '', appId, repoUrl, branch || 'main', authType || 'token', authToken || '', projectPath || '', envs, now, now)
+  `).run(id, name, description || '', appId, repoUrl, branch || 'main', authType || 'token', encryptSecret(authToken || ''), projectPath || '', envs, now, now)
 
   const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as any
 
-  res.status(201).json({
-    id: row.id,
-    name: row.name,
-    description: row.description || undefined,
-    appId: row.app_id,
-    repoUrl: row.repo_url,
-    branch: row.branch,
-    authType: row.auth_type,
-    hasAuthToken: !!row.auth_token,
-    environments: JSON.parse(row.environments || '{}'),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  })
+  res.status(201).json(toProjectResponse(row))
 })
 
 // PUT /api/projects/:id
@@ -119,9 +146,9 @@ router.put('/:id', (req: Request, res: Response) => {
   if (repoUrl !== undefined) updates.repo_url = repoUrl
   if (branch !== undefined) updates.branch = branch
   if (authType !== undefined) updates.auth_type = authType
-  if (authToken !== undefined) updates.auth_token = authToken
+  if (authToken !== undefined) updates.auth_token = encryptSecret(authToken)
   if (projectPath !== undefined) updates.project_path = projectPath
-  if (environments !== undefined) updates.environments = JSON.stringify(environments)
+  if (environments !== undefined) updates.environments = encryptEnvironmentSecrets(environments, (existing as any).environments)
 
   const setClauses = Object.keys(updates).map(k => `${k} = ?`).join(', ')
   const values = Object.values(updates)
@@ -130,19 +157,7 @@ router.put('/:id', (req: Request, res: Response) => {
 
   const row = db.prepare('SELECT * FROM projects WHERE id = ?').get(req.params.id) as any
 
-  res.json({
-    id: row.id,
-    name: row.name,
-    description: row.description || undefined,
-    appId: row.app_id,
-    repoUrl: row.repo_url,
-    branch: row.branch,
-    authType: row.auth_type,
-    hasAuthToken: !!row.auth_token,
-    environments: JSON.parse(row.environments || '{}'),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  })
+  res.json(toProjectResponse(row))
 })
 
 // DELETE /api/projects/:id

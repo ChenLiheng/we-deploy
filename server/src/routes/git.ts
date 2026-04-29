@@ -7,6 +7,7 @@ import {
   createGitClient,
   redactCredentials,
 } from '../utils/gitAuth.js'
+import { decryptSecret } from '../utils/secretVault.js'
 
 const router = Router()
 
@@ -38,7 +39,7 @@ function getToken(req: Request): string {
     const project = getDb()
       .prepare('SELECT auth_token FROM projects WHERE id = ?')
       .get(projectId) as any
-    return project?.auth_token || ''
+    return decryptSecret(project?.auth_token || '')
   }
   return ''
 }
