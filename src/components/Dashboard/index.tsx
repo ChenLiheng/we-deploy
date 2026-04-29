@@ -15,12 +15,13 @@ import { useProjectStore } from '@stores/projectStore'
 import type { BuildRecord, BuildStatus } from '@/types'
 import './Dashboard.less'
 
-// 必须覆盖 BuildStatus 全部 7 种取值（pending/cloning/installing/building/uploading/success/failed），
+// 必须覆盖 BuildStatus 全部状态，
 // 用 Record<BuildStatus, ...> 让 TS 在以后新增状态时编译期就强制提示，
 // 避免之前 `statusConfig[build.status]` 拿到 undefined → `.color` 崩溃整个 Dashboard 的问题。
 // 颜色 / 图标与 BuildHistory 页面保持一致，确保两个页面状态展示统一。
 const statusConfig: Record<BuildStatus, { color: string; icon: React.ReactNode; text: string }> = {
   pending: { color: '#8b949e', icon: <ClockCircleOutlined />, text: 'PENDING' },
+  queued: { color: '#d29922', icon: <ClockCircleOutlined />, text: 'QUEUED' },
   cloning: { color: '#58a6ff', icon: <SyncOutlined spin />, text: 'CLONING' },
   installing: { color: '#58a6ff', icon: <SyncOutlined spin />, text: 'INSTALLING' },
   building: { color: '#58a6ff', icon: <SyncOutlined spin />, text: 'BUILDING' },

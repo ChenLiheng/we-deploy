@@ -4,6 +4,7 @@ import fs from 'fs'
 import { getDb } from '../db/init.js'
 import { startPreview } from '../services/buildWorker.js'
 import { subscribeBuildEvents } from '../services/buildEvents.js'
+import { enqueueBuildTask } from '../services/buildQueue.js'
 
 const router = Router()
 
@@ -273,13 +274,15 @@ router.post('/:id/preview', (req: Request, res: Response) => {
 
   const { pagePath } = req.body || {}
 
-  // Start preview in background
-  // 透传 builds 表中记录的 branch，保证预览拉取的分支与最初构建时一致
-  startPreview(req.params.id, project, db, {
-    environment: row.environment,
-    pagePath,
-    branch: row.branch,
-  }).catch((err) => console.error('Preview failed:', err))
+  // 预览也走同一队列，避免 preview 与 upload 构建同时打满机器资源。
+  // 透传 builds 表中记录的 branch，保证预览拉取的分支与最初构建时一致。
+  enqueueBuildTask(req.params.id, db, () =>
+    startPreview(req.params.id, project, db, {
+      environment: row.environment,
+      pagePath,
+      branch: row.branch,
+    })
+  )
 
   res.json({ message: '预览构建已触发', buildId: req.params.id })
 })

@@ -2,6 +2,7 @@ export type EnvironmentType = 'dev' | 'prod'
 export type IterationStatus = 'active' | 'building' | 'closed'
 export type BuildStatus =
   | 'pending'
+  | 'queued'
   | 'cloning'
   | 'installing'
   | 'building'
