@@ -178,7 +178,9 @@ function startSSE(
   ) => void,
   get: () => BuildConsoleState
 ): () => void {
-  const url = `/api/builds/${buildId}/logs/stream`
+  // EventSource 无法带 Authorization 头，须与 authMiddleware 的 access_token 查询参数对齐
+  const baseStreamUrl = `/api/builds/${buildId}/logs/stream`
+  const url = appendAccessToken(baseStreamUrl) ?? baseStreamUrl
   let es: EventSource | null = new EventSource(url)
   let fallbackCleanup: (() => void) | null = null
   let consecutiveErrors = 0
