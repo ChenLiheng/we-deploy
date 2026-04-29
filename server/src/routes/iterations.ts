@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express'
 import { getDb } from '../db/init.js'
 import { startBuild } from '../services/buildWorker.js'
+import { enqueueBuildTask } from '../services/buildQueue.js'
 
 const router = Router()
 
@@ -168,7 +169,7 @@ router.post('/:id/build', (req: Request, res: Response) => {
   const txn = db.transaction(() => {
     db.prepare(`
       INSERT INTO builds (id, project_id, iteration_id, environment, status, version, description, branch, start_time, trigger_by)
-      VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
     `).run(buildId, projectId, iteration.id, iteration.environment, iteration.version, `${iteration.environment} build`, iteration.branch, now, '当前用户')
 
     db.prepare('UPDATE iterations SET status = ?, build_id = ?, updated_at = ? WHERE id = ?')
@@ -176,14 +177,15 @@ router.post('/:id/build', (req: Request, res: Response) => {
   })
   txn()
 
-  // Start build worker in background
-  // 把迭代上配置的 branch 透传到 worker，确保 git clone 拉取用户选定的分支，
-  // 而不是回退到项目默认分支（之前 bug：迭代配 master 但仍 clone main）
-  startBuild(buildId, project, db, {
-    version: iteration.version,
-    environment: iteration.environment,
-    branch: iteration.branch,
-  }).catch((err) => console.error('Build failed:', err))
+  // 入队后由 buildQueue 控制全局并发；真正执行时仍透传迭代上的 branch，
+  // 确保 git clone 拉取用户选定的分支。
+  enqueueBuildTask(buildId, db, () =>
+    startBuild(buildId, project, db, {
+      version: iteration.version,
+      environment: iteration.environment,
+      branch: iteration.branch,
+    })
+  )
 
   const build = db.prepare('SELECT * FROM builds WHERE id = ?').get(buildId) as any
   res.status(201).json(build)

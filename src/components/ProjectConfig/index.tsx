@@ -35,7 +35,7 @@ const ProjectConfig: React.FC = () => {
             prodEs6: p.environments.prod?.setting?.es6,
             prodEs7: p.environments.prod?.setting?.es7,
             prodMinify: p.environments.prod?.setting?.minify,
-            privateKey: p.environments.private_key,
+            privateKey: undefined,
             // 编译型小程序框架支持：installCommand / buildCommand / miniprogramRoot / npmBuild
             installCommand: p.environments.installCommand,
             buildCommand: p.environments.buildCommand,
@@ -66,7 +66,7 @@ const ProjectConfig: React.FC = () => {
         updateData.authToken = values.authToken
       }
       updateData.environments = {
-        private_key: values.privateKey,
+        ...(values.privateKey ? { private_key: values.privateKey } : {}),
         // 编译型小程序框架（Taro/uni-app 等）所需字段：
         //  - installCommand：自定义依赖安装命令（pnpm/yarn 项目用）
         //  - buildCommand：clone 后执行的编译命令，例如 'npm run build:weapp'
@@ -226,7 +226,7 @@ const ProjectConfig: React.FC = () => {
         <div className="config-section">
           <Form.Item name="privateKey" label="微信 CI 私钥">
             <Input.TextArea
-              placeholder="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----"
+              placeholder={project?.hasPrivateKey ? '已配置（不修改请留空）' : '-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----'}
               rows={10}
               className="code-textarea"
               style={{ fontFamily: 'var(--geek-font-mono)', fontSize: 12 }}

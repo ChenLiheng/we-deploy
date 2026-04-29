@@ -8,6 +8,7 @@ import {
   createGitClient,
   redactCredentials,
 } from '../utils/gitAuth.js'
+import { decryptSecret } from '../utils/secretVault.js'
 import { emitBuildLog, emitBuildStatus, type BuildLogEvent } from './buildEvents.js'
 
 /**
@@ -241,7 +242,7 @@ async function prepareCode(
   const isSsh = project.auth_type === 'ssh'
   const cloneUrl = isSsh
     ? project.repo_url
-    : buildAuthenticatedRepoUrl(project.repo_url, project.auth_token)
+    : buildAuthenticatedRepoUrl(project.repo_url, decryptSecret(project.auth_token))
 
   // 3. 解析最终分支：优先使用调用方传入的 branch（迭代/构建记录），否则回退到项目默认 branch
   const targetBranch = resolveBranch(project, branch)
@@ -617,7 +618,11 @@ function cleanupSandbox(
  */
 function parseEnvironments(raw: string): EnvironmentsConfig {
   try {
-    return JSON.parse(raw || '{}') as EnvironmentsConfig
+    const env = JSON.parse(raw || '{}') as EnvironmentsConfig
+    if (env.private_key) env.private_key = decryptSecret(env.private_key)
+    if (env.dev?.private_key) env.dev.private_key = decryptSecret(env.dev.private_key)
+    if (env.prod?.private_key) env.prod.private_key = decryptSecret(env.prod.private_key)
+    return env
   } catch {
     return {} as EnvironmentsConfig
   }

@@ -1,6 +1,7 @@
 import express from 'express'
 import cors from 'cors'
 import bcrypt from 'bcryptjs'
+import crypto from 'crypto'
 import { initDatabase, getDb } from './db/init.js'
 import { errorHandler } from './middleware/errorHandler.js'
 import projectRoutes from './routes/projects.js'
@@ -10,6 +11,7 @@ import settingsRoutes from './routes/settings.js'
 import gitRoutes from './routes/git.js'
 import ciRoutes from './routes/ci.js'
 import authRoutes from './routes/auth.js'
+import { authMiddleware } from './middleware/auth.js'
 import {
   runBuildRetentionCleanup,
   startBuildRetentionScheduler,
@@ -23,7 +25,22 @@ const PORT = Number(process.env.PORT) || 8080
 const HOST = process.env.HOST || '0.0.0.0'
 const DB_PATH = process.env.DB_PATH || undefined
 
-app.use(cors())
+const allowedOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean)
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+        callback(null, true)
+        return
+      }
+      callback(new Error('Not allowed by CORS'))
+    },
+  })
+)
 app.use(express.json({ limit: '10mb' }))
 
 // 初始化数据库（DB_PATH 未设置时沿用原默认逻辑：data/we-deploy.db）
@@ -91,27 +108,41 @@ const userCount = (db.prepare('SELECT COUNT(*) as count FROM users').get() as an
 if (userCount === 0) {
   const id = `admin_${Date.now().toString(36)}`
   const now = new Date().toISOString()
-  const hashed = bcrypt.hashSync('admin123', 10)
+  const username = process.env.INITIAL_ADMIN_USERNAME || 'admin'
+  const generatedPassword = crypto.randomBytes(18).toString('base64url')
+  const password = process.env.INITIAL_ADMIN_PASSWORD || generatedPassword
   db.prepare(`
     INSERT INTO users (id, username, password, display_name, email, role, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, 'admin', ?, ?)
-  `).run(id, 'admin', hashed, 'Administrator', 'admin@we-deploy.local', now, now)
-  console.log('✓ Default admin account created (admin / admin123)')
+  `).run(
+    id,
+    username,
+    bcrypt.hashSync(password, 10),
+    'Administrator',
+    'admin@we-deploy.local',
+    now,
+    now
+  )
+  console.log(`✓ Initial admin account created (${username})`)
+  if (!process.env.INITIAL_ADMIN_PASSWORD) {
+    console.log(`✓ Initial admin password: ${generatedPassword}`)
+  }
 }
+
+// Health check
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() })
+})
 
 // Mount routes
 app.use('/api/auth', authRoutes)
+app.use('/api', authMiddleware)
 app.use('/api/projects', projectRoutes)
 app.use('/api/iterations', iterationRoutes)
 app.use('/api/builds', buildRoutes)
 app.use('/api/settings', settingsRoutes)
 app.use('/api/git', gitRoutes)
 app.use('/api/ci', ciRoutes)
-
-// Health check
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() })
-})
 
 // Error handler
 app.use(errorHandler)

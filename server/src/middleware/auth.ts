@@ -1,7 +1,16 @@
 import { Request, Response, NextFunction } from 'express'
 import jwt from 'jsonwebtoken'
 
-const JWT_SECRET = process.env.JWT_SECRET || 'we-deploy-secret-key-2024'
+function getJwtSecret(): string {
+  const secret = process.env.JWT_SECRET
+  if (secret) return secret
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('JWT_SECRET must be configured in production')
+  }
+
+  return 'we-deploy-dev-secret'
+}
 
 export interface JwtPayload {
   userId: string
@@ -19,19 +28,21 @@ declare global {
 }
 
 export function signToken(payload: JwtPayload): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' })
+  return jwt.sign(payload, getJwtSecret(), { expiresIn: '7d' })
 }
 
 export function authMiddleware(req: Request, res: Response, next: NextFunction) {
   const header = req.headers.authorization
-  if (!header || !header.startsWith('Bearer ')) {
+  const queryToken = typeof req.query.access_token === 'string' ? req.query.access_token : ''
+  const token = header?.startsWith('Bearer ') ? header.slice(7) : queryToken
+
+  if (!token) {
     res.status(401).json({ error: '未提供认证令牌' })
     return
   }
 
-  const token = header.slice(7)
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload
+    const decoded = jwt.verify(token, getJwtSecret()) as JwtPayload
     req.user = decoded
     next()
   } catch {

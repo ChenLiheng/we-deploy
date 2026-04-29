@@ -54,7 +54,7 @@ pnpm dev:all
 
 # 3. 浏览器访问
 open http://localhost:5173
-# 默认管理员：admin / admin123（首次登录后请立即修改）
+# 首次启动会在后端控制台打印初始管理员密码；也可用 INITIAL_ADMIN_PASSWORD 指定
 ```
 
 启动后默认监听：
@@ -63,7 +63,7 @@ open http://localhost:5173
 - 后端 API：<http://localhost:8080>
 - 健康检查：<http://localhost:8080/api/health>
 
-> 默认数据库存放在 `server/data/we-deploy.db`，首次启动自动初始化 schema 与 admin 账号。
+> 默认数据库存放在 `server/data/we-deploy.db`，首次启动自动初始化 schema 与 admin 账号；生产环境必须配置 `JWT_SECRET`。
 
 ## 项目配置（核心）
 
@@ -114,6 +114,8 @@ docker compose up -d --build
 | `SANDBOX_BASE`       | /data/sandbox      | git clone 临时目录                                                                                      |
 | `QRCODE_BASE`        | /data/qrcodes      | 预览二维码保存目录                                                                                      |
 | `CI_PROC_CWD`       | /tmp/we-deploy/ci-proc | miniprogram-ci 执行时的进程工作目录，其临时/缓存文件写入此处，避免落在项目代码目录                                                |
+| `JWT_SECRET`        | -                  | JWT 签名密钥；生产环境必填                                                                                 |
+| `APP_ENCRYPTION_KEY` | -                 | Git Token、微信 CI 私钥等敏感配置的加密密钥；生产环境必填                                                    |
 | `LOG_RETENTION_DAYS` | 30                 | 构建记录与控制台日志保留天数；早于该阈值的 `builds` 及关联 `build_logs` 会被删除；设为 `0` 关闭自动清理 |
 | `WE_DEPLOY_PORT`     | 8000               | web 容器对外暴露端口（仅 docker-compose.yml 中使用）                                                    |
 

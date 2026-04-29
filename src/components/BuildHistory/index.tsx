@@ -16,6 +16,7 @@ import './BuildHistory.less'
 
 const statusConfig: Record<BuildStatus, { color: string; icon: React.ReactNode; text: string }> = {
   pending: { color: '#8b949e', icon: <ClockCircleOutlined />, text: 'PENDING' },
+  queued: { color: '#d29922', icon: <ClockCircleOutlined />, text: 'QUEUED' },
   cloning: { color: '#58a6ff', icon: <SyncOutlined spin />, text: 'CLONING' },
   installing: { color: '#58a6ff', icon: <SyncOutlined spin />, text: 'INSTALLING' },
   building: { color: '#58a6ff', icon: <SyncOutlined spin />, text: 'BUILDING' },

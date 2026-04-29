@@ -2,6 +2,7 @@ export type EnvironmentType = 'dev' | 'prod'
 export type IterationStatus = 'active' | 'building' | 'closed'
 export type BuildStatus =
   | 'pending'
+  | 'queued'
   | 'cloning'
   | 'installing'
   | 'building'
@@ -20,6 +21,7 @@ export interface ProjectConfig {
   authType: GitAuthType
   authToken?: string
   hasAuthToken?: boolean
+  hasPrivateKey?: boolean
   sshKeyPath?: string
   projectPath?: string
   environments: {
