@@ -1,6 +1,7 @@
 import express from 'express'
 import cors from 'cors'
 import bcrypt from 'bcryptjs'
+import crypto from 'crypto'
 import { initDatabase, getDb } from './db/init.js'
 import { errorHandler } from './middleware/errorHandler.js'
 import projectRoutes from './routes/projects.js'
@@ -107,12 +108,25 @@ const userCount = (db.prepare('SELECT COUNT(*) as count FROM users').get() as an
 if (userCount === 0) {
   const id = `admin_${Date.now().toString(36)}`
   const now = new Date().toISOString()
-  const hashed = bcrypt.hashSync('admin123', 10)
+  const username = process.env.INITIAL_ADMIN_USERNAME || 'admin'
+  const generatedPassword = crypto.randomBytes(18).toString('base64url')
+  const password = process.env.INITIAL_ADMIN_PASSWORD || generatedPassword
   db.prepare(`
     INSERT INTO users (id, username, password, display_name, email, role, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, 'admin', ?, ?)
-  `).run(id, 'admin', hashed, 'Administrator', 'admin@we-deploy.local', now, now)
-  console.log('✓ Default admin account created (admin / admin123)')
+  `).run(
+    id,
+    username,
+    bcrypt.hashSync(password, 10),
+    'Administrator',
+    'admin@we-deploy.local',
+    now,
+    now
+  )
+  console.log(`✓ Initial admin account created (${username})`)
+  if (!process.env.INITIAL_ADMIN_PASSWORD) {
+    console.log(`✓ Initial admin password: ${generatedPassword}`)
+  }
 }
 
 // Health check

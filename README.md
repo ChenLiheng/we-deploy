@@ -54,7 +54,7 @@ pnpm dev:all
 
 # 3. 浏览器访问
 open http://localhost:5173
-# 默认管理员：admin / admin123（首次登录后请立即修改）
+# 首次启动会在后端控制台打印初始管理员密码；也可用 INITIAL_ADMIN_PASSWORD 指定
 ```
 
 启动后默认监听：
@@ -63,7 +63,7 @@ open http://localhost:5173
 - 后端 API：<http://localhost:8080>
 - 健康检查：<http://localhost:8080/api/health>
 
-> 默认数据库存放在 `server/data/we-deploy.db`，首次启动自动初始化 schema 与 admin 账号。
+> 默认数据库存放在 `server/data/we-deploy.db`，首次启动自动初始化 schema 与 admin 账号；生产环境必须配置 `JWT_SECRET`。
 
 ## 项目配置（核心）
 

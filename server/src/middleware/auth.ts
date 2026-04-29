@@ -1,7 +1,16 @@
 import { Request, Response, NextFunction } from 'express'
 import jwt from 'jsonwebtoken'
 
-const JWT_SECRET = process.env.JWT_SECRET || 'we-deploy-secret-key-2024'
+function getJwtSecret(): string {
+  const secret = process.env.JWT_SECRET
+  if (secret) return secret
+
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('JWT_SECRET must be configured in production')
+  }
+
+  return 'we-deploy-dev-secret'
+}
 
 export interface JwtPayload {
   userId: string
@@ -19,7 +28,7 @@ declare global {
 }
 
 export function signToken(payload: JwtPayload): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '7d' })
+  return jwt.sign(payload, getJwtSecret(), { expiresIn: '7d' })
 }
 
 export function authMiddleware(req: Request, res: Response, next: NextFunction) {
@@ -33,7 +42,7 @@ export function authMiddleware(req: Request, res: Response, next: NextFunction) 
   }
 
   try {
-    const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload
+    const decoded = jwt.verify(token, getJwtSecret()) as JwtPayload
     req.user = decoded
     next()
   } catch {
