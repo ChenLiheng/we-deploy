@@ -10,6 +10,7 @@ import settingsRoutes from './routes/settings.js'
 import gitRoutes from './routes/git.js'
 import ciRoutes from './routes/ci.js'
 import authRoutes from './routes/auth.js'
+import { authMiddleware } from './middleware/auth.js'
 import {
   runBuildRetentionCleanup,
   startBuildRetentionScheduler,
@@ -23,7 +24,22 @@ const PORT = Number(process.env.PORT) || 8080
 const HOST = process.env.HOST || '0.0.0.0'
 const DB_PATH = process.env.DB_PATH || undefined
 
-app.use(cors())
+const allowedOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean)
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+        callback(null, true)
+        return
+      }
+      callback(new Error('Not allowed by CORS'))
+    },
+  })
+)
 app.use(express.json({ limit: '10mb' }))
 
 // 初始化数据库（DB_PATH 未设置时沿用原默认逻辑：data/we-deploy.db）
@@ -99,19 +115,20 @@ if (userCount === 0) {
   console.log('✓ Default admin account created (admin / admin123)')
 }
 
+// Health check
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() })
+})
+
 // Mount routes
 app.use('/api/auth', authRoutes)
+app.use('/api', authMiddleware)
 app.use('/api/projects', projectRoutes)
 app.use('/api/iterations', iterationRoutes)
 app.use('/api/builds', buildRoutes)
 app.use('/api/settings', settingsRoutes)
 app.use('/api/git', gitRoutes)
 app.use('/api/ci', ciRoutes)
-
-// Health check
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() })
-})
 
 // Error handler
 app.use(errorHandler)

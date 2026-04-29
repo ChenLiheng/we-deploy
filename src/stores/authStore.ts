@@ -18,7 +18,7 @@ interface AuthState {
   fetchMe: () => Promise<void>
 }
 
-function getStoredToken(): string | null {
+export function getStoredAuthToken(): string | null {
   try {
     return localStorage.getItem('we_deploy_token')
   } catch {
@@ -35,7 +35,7 @@ function setStoredToken(token: string | null) {
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
-  token: getStoredToken(),
+  token: getStoredAuthToken(),
   user: null,
   loading: true,
 
@@ -53,7 +53,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   fetchMe: async () => {
-    const token = getStoredToken()
+    const token = getStoredAuthToken()
     if (!token) {
       set({ loading: false })
       return
@@ -70,7 +70,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 }))
 
 // Set default auth header when token is available
-const token = getStoredToken()
+const token = getStoredAuthToken()
 if (token) {
   api.defaults.headers.common['Authorization'] = `Bearer ${token}`
 }

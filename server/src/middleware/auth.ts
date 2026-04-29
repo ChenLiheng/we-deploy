@@ -24,12 +24,14 @@ export function signToken(payload: JwtPayload): string {
 
 export function authMiddleware(req: Request, res: Response, next: NextFunction) {
   const header = req.headers.authorization
-  if (!header || !header.startsWith('Bearer ')) {
+  const queryToken = typeof req.query.access_token === 'string' ? req.query.access_token : ''
+  const token = header?.startsWith('Bearer ') ? header.slice(7) : queryToken
+
+  if (!token) {
     res.status(401).json({ error: '未提供认证令牌' })
     return
   }
 
-  const token = header.slice(7)
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload
     req.user = decoded

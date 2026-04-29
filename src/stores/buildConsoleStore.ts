@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import api from '@services/serverApi'
 import type { BuildRecord, BuildLog, BuildStatus } from '@/types'
+import { getStoredAuthToken } from './authStore'
 
 /**
  * 当前订阅日志的传输方式：
@@ -54,6 +55,20 @@ function normalizeLog(raw: any): BuildLog {
   }
 }
 
+function appendAccessToken(url?: string): string | undefined {
+  const token = getStoredAuthToken()
+  if (!url || !token) return url
+  const separator = url.includes('?') ? '&' : '?'
+  return `${url}${separator}access_token=${encodeURIComponent(token)}`
+}
+
+function normalizeBuild(raw: BuildRecord): BuildRecord {
+  return {
+    ...raw,
+    qrcodeUrl: appendAccessToken(raw.qrcodeUrl),
+  }
+}
+
 /**
  * 模块级单连接句柄。
  * 保证不会因为「切换 buildId / 刷新按钮 / hot reload」叠加出多个 EventSource，
@@ -71,7 +86,7 @@ export const useBuildConsoleStore = create<BuildConsoleState>((set, get) => ({
 
   setBuild: (build) =>
     set({
-      currentBuild: build,
+      currentBuild: normalizeBuild(build),
       logs: build.logs || [],
       status: build.status,
       lastLogTs: (build.logs || []).reduce((mx, l) => (l.timestamp > mx ? l.timestamp : mx), 0),
@@ -102,7 +117,7 @@ export const useBuildConsoleStore = create<BuildConsoleState>((set, get) => ({
   fetchBuild: async (buildId: string) => {
     try {
       const { data } = await api.get(`/builds/${buildId}`)
-      set({ currentBuild: data, status: data.status })
+      set({ currentBuild: normalizeBuild(data), status: data.status })
     } catch {
       // build not found yet
     }
