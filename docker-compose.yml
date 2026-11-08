@@ -1,10 +1,10 @@
 # WeDeploy 一键启动编排
 # ------------------------------------------------------------
 # 用法：
-#   1) 复制示例环境变量：cp .env.example .env，按需调整
+#   1) 复制示例环境变量：cp .env.example .env，并填写 JWT_SECRET / APP_ENCRYPTION_KEY
 #   2) 启动：             docker compose up -d --build
 #   3) 浏览器访问：       http://<server-ip>:${WE_DEPLOY_PORT:-8000}
-#   4) 默认管理员账号：   admin / admin123（首次启动后请立即修改）
+#   4) 初始管理员账号：   admin，初始密码见 docker compose logs api | grep "Initial admin password"
 #
 # 数据持久化目录：./data —— 含 SQLite 数据库 / 二维码 / 临时沙盒。
 # 升级时直接 docker compose up -d --build 即可保留数据。
@@ -25,6 +25,12 @@ services:
       DB_PATH: /data/we-deploy.db
       SANDBOX_BASE: /data/sandbox
       QRCODE_BASE: /data/qrcodes
+      # 生产环境必填：缺失时 compose 直接报错，避免服务启动后登录/保存项目才 500
+      JWT_SECRET: ${JWT_SECRET:?请在 .env 中设置 JWT_SECRET（可用 openssl rand -hex 32 生成）}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:?请在 .env 中设置 APP_ENCRYPTION_KEY（可用 openssl rand -hex 32 生成；设置后不要再修改）}
+      # 可选：初始管理员密码（不设置则随机生成并打印到日志）
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD:-}
+      LOG_RETENTION_DAYS: ${LOG_RETENTION_DAYS:-30}
       # miniprogram-ci 进程 cwd 落点，避免在项目目录写入临时文件
       # CI_PROC_CWD: /tmp/we-deploy/ci-proc
       #   - ./ssh:/root/.ssh:ro

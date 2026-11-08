@@ -121,6 +121,20 @@ build_project() {
 
 # ---------- 5. 安装 systemd 单元 ----------
 install_service() {
+  # 生产环境必需的密钥：首次安装时随机生成并保存到 ${DATA_DIR}/we-deploy.env（仅 root 可读写），
+  # 重复执行脚本不会覆盖，避免已加密的 Token / 私钥无法解密
+  local env_file="${DATA_DIR}/we-deploy.env"
+  if [[ ! -f "${env_file}" ]]; then
+    log "生成密钥文件 ${env_file}"
+    mkdir -p "${DATA_DIR}"
+    umask 077
+    cat >"${env_file}" <<ENVEOF
+JWT_SECRET=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
+APP_ENCRYPTION_KEY=$(node -e "console.log(require('crypto').randomBytes(32).toString('hex'))")
+ENVEOF
+    chmod 600 "${env_file}"
+  fi
+
   log "注册 systemd 服务"
   sed \
     -e "s|@INSTALL_DIR@|${INSTALL_DIR}|g" \
@@ -154,7 +168,10 @@ print_nginx_hint() {
   journalctl -u we-deploy -f
   systemctl restart we-deploy
 
-默认管理员账号：admin / admin123（首次登录后请立即修改）
+初始管理员账号：admin，初始密码打印在首次启动日志中：
+  journalctl -u we-deploy | grep "Initial admin password"
+登录后请在右上角「修改密码」中立即修改。
+密钥文件：${DATA_DIR}/we-deploy.env（请妥善备份，丢失后已保存的 Token / 私钥将无法解密）
 EOF
 }
 
