@@ -1,32 +1,60 @@
-import React from 'react'
-import { Layout, Menu, Avatar, Dropdown, message } from 'antd'
+import React, { useState } from 'react'
+import { Layout, Menu, Avatar, Dropdown, Drawer, Button, Grid, App } from 'antd'
 import {
-  ProjectOutlined,
-  CloudUploadOutlined,
-  SettingOutlined,
-  UserOutlined,
-  LogoutOutlined,
-  CodeOutlined,
+  AppstoreOutlined,
   RocketOutlined,
+  HistoryOutlined,
+  SettingOutlined,
+  DashboardOutlined,
+  LogoutOutlined,
+  KeyOutlined,
+  MenuOutlined,
+  BookOutlined,
 } from '@ant-design/icons'
 import { Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '@stores/authStore'
-import './MainLayout.less'
+import ChangePasswordModal from '@components/common/ChangePasswordModal'
 
 const { Header, Sider, Content } = Layout
+
+const MENU_ITEMS = [
+  { key: '/dashboard', icon: <DashboardOutlined />, label: '工作台' },
+  { key: '/projects', icon: <AppstoreOutlined />, label: '项目' },
+  { key: '/iterations', icon: <RocketOutlined />, label: '迭代发布' },
+  { key: '/builds', icon: <HistoryOutlined />, label: '构建记录' },
+  { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
+]
+
+/** 根据当前路径选中菜单：/projects/:id/config 等子页面归属到对应一级菜单 */
+function getSelectedKey(pathname: string): string {
+  if (/^\/projects\/[^/]+\/builds\//.test(pathname)) return '/builds'
+  const hit = MENU_ITEMS.find((m) => pathname === m.key || pathname.startsWith(`${m.key}/`))
+  return hit?.key || '/dashboard'
+}
+
+const Logo: React.FC = () => (
+  <div className="app-logo">
+    <div className="app-logo__mark">
+      <RocketOutlined />
+    </div>
+    <div className="app-logo__text">
+      <span className="app-logo__name">WeDeploy</span>
+      <span className="app-logo__sub">小程序发布平台</span>
+    </div>
+  </div>
+)
 
 const MainLayout: React.FC = () => {
   const navigate = useNavigate()
   const location = useLocation()
+  const { message } = App.useApp()
+  const screens = Grid.useBreakpoint()
+  const isDesktop = !!screens.lg
   const { user, logout } = useAuthStore()
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [pwdOpen, setPwdOpen] = useState(false)
 
-  const menuItems = [
-    { key: '/dashboard', icon: <CodeOutlined />, label: '控制台' },
-    { key: '/projects', icon: <ProjectOutlined />, label: '项目管理' },
-    { key: '/iterations', icon: <RocketOutlined />, label: '迭代管理' },
-    { key: '/builds', icon: <CloudUploadOutlined />, label: '构建历史' },
-    { key: '/settings', icon: <SettingOutlined />, label: '系统设置' },
-  ]
+  const selectedKey = getSelectedKey(location.pathname)
 
   const handleLogout = () => {
     logout()
@@ -34,94 +62,114 @@ const MainLayout: React.FC = () => {
     navigate('/login', { replace: true })
   }
 
-  const userMenuItems = [
-    {
-      key: 'info',
-      label: (
-        <span style={{ fontFamily: 'var(--geek-font-mono)', fontSize: 12, color: '#8b949e' }}>
-          {user?.username || user?.email}
-        </span>
-      ),
-      disabled: true,
-    },
-    { type: 'divider' as const },
-    {
-      key: 'logout',
-      icon: <LogoutOutlined />,
-      label: '退出登录',
-      onClick: handleLogout,
-    },
-  ]
+  const menu = (
+    <Menu
+      mode="inline"
+      selectedKeys={[selectedKey]}
+      items={MENU_ITEMS}
+      onClick={({ key }) => {
+        navigate(key)
+        setDrawerOpen(false)
+      }}
+      className="app-menu"
+    />
+  )
 
-  const pathMap: Record<string, string> = {
-    '/dashboard': 'dashboard',
-    '/projects': 'projects',
-    '/iterations': 'iterations',
-    '/builds': 'builds',
-    '/settings': 'settings',
-  }
-
-  const currentPath = pathMap[location.pathname] || location.pathname.split('/').pop() || ''
+  const displayName = user?.displayName || user?.username || '用户'
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
-      <Sider
-        theme="dark"
-        breakpoint="lg"
-        collapsedWidth="80"
-        style={{ position: 'fixed', left: 0, top: 0, bottom: 0, zIndex: 100, height: '100vh' }}
+    <Layout className="app-layout">
+      {isDesktop && (
+        <Sider width={224} className="app-sider">
+          <Logo />
+          {menu}
+          <a
+            className="app-sider__footer"
+            href="https://developers.weixin.qq.com/miniprogram/dev/devtools/ci.html"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <BookOutlined /> miniprogram-ci 文档
+          </a>
+        </Sider>
+      )}
+
+      <Drawer
+        placement="left"
+        open={!isDesktop && drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        size={240}
+        closable={false}
+        styles={{ body: { padding: 0 } }}
       >
-        <div className="sider-inner">
-          <div className="logo">
-            <div className="logo-icon">
-              <span className="prompt">$</span>
-            </div>
-            <span className="logo-text">we-deploy</span>
-          </div>
-          <div className="menu-wrapper">
-            <Menu
-              theme="dark"
-              mode="inline"
-              selectedKeys={[location.pathname]}
-              items={menuItems}
-              onClick={({ key }) => navigate(key)}
-              className="geek-menu"
-            />
-          </div>
-          <div className="terminal-footer">
-            <div className="status-line">
-              <span className="status-dot online"></span>
-              <span className="status-text">SYSTEM ONLINE</span>
-            </div>
-          </div>
-        </div>
-      </Sider>
+        <Logo />
+        {menu}
+      </Drawer>
 
-      <Layout style={{ marginLeft: 200 }}>
-        <Header className="site-layout-header">
-          <div className="header-left">
-            <div className="breadcrumb">
-              <span className="breadcrumb-item">~/we-deploy</span>
-              <span className="breadcrumb-separator">/</span>
-              <span className="breadcrumb-current">{currentPath}</span>
-            </div>
+      <Layout className="app-main" style={{ marginLeft: isDesktop ? 224 : 0 }}>
+        <Header className="app-header">
+          <div className="app-header__left">
+            {!isDesktop && (
+              <>
+                <Button
+                  type="text"
+                  icon={<MenuOutlined />}
+                  onClick={() => setDrawerOpen(true)}
+                  aria-label="打开菜单"
+                />
+                <span className="app-header__brand">WeDeploy</span>
+              </>
+            )}
           </div>
-
-          <div className="header-right">
-            <Dropdown menu={{ items: userMenuItems }} placement="bottomRight">
-              <div className="user-info">
-                <Avatar icon={<UserOutlined />} className="geek-avatar" />
-                <span className="username">{user?.displayName || user?.username || '用户'}</span>
-                <span className="cursor-blink">{'█'}</span>
-              </div>
-            </Dropdown>
-          </div>
+          <Dropdown
+            placement="bottomRight"
+            trigger={['click']}
+            menu={{
+              items: [
+                {
+                  key: 'info',
+                  label: (
+                    <div className="user-menu__info">
+                      <div className="user-menu__name">{displayName}</div>
+                      <div className="user-menu__role">
+                        {user?.username} · {user?.role === 'admin' ? '管理员' : '成员'}
+                      </div>
+                    </div>
+                  ),
+                  disabled: true,
+                },
+                { type: 'divider' },
+                {
+                  key: 'password',
+                  icon: <KeyOutlined />,
+                  label: '修改密码',
+                  onClick: () => setPwdOpen(true),
+                },
+                {
+                  key: 'logout',
+                  icon: <LogoutOutlined />,
+                  label: '退出登录',
+                  danger: true,
+                  onClick: handleLogout,
+                },
+              ],
+            }}
+          >
+            <button type="button" className="user-trigger">
+              <Avatar size={30} className="user-trigger__avatar">
+                {displayName.slice(0, 1).toUpperCase()}
+              </Avatar>
+              {screens.sm && <span className="user-trigger__name">{displayName}</span>}
+            </button>
+          </Dropdown>
         </Header>
 
-        <Content className="site-layout-content">
+        <Content className="app-content">
           <Outlet />
         </Content>
       </Layout>
+
+      <ChangePasswordModal open={pwdOpen} onClose={() => setPwdOpen(false)} />
     </Layout>
   )
 }

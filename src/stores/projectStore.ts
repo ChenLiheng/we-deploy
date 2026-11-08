@@ -1,74 +1,65 @@
 import { create } from 'zustand'
 import api from '@services/serverApi'
-import type { ProjectConfig, BuildRecord, EnvironmentType } from '@/types'
+import type { ProjectConfig, BuildRecord } from '@/types'
+
+export type ProjectInput = Partial<Omit<ProjectConfig, 'id' | 'createdAt' | 'updatedAt'>>
 
 interface ProjectState {
   projects: ProjectConfig[]
   builds: BuildRecord[]
   loading: boolean
+  buildsLoading: boolean
+  projectsLoaded: boolean
   fetchProjects: () => Promise<void>
   fetchProjectById: (id: string) => Promise<ProjectConfig | undefined>
-  updateProject: (id: string, config: Partial<ProjectConfig>) => Promise<void>
-  createProject: (
-    config: Omit<ProjectConfig, 'id' | 'createdAt' | 'updatedAt'>,
-  ) => Promise<ProjectConfig>
+  updateProject: (id: string, config: ProjectInput) => Promise<ProjectConfig>
+  createProject: (config: ProjectInput) => Promise<ProjectConfig>
   deleteProject: (id: string) => Promise<void>
-  fetchBuilds: (projectId?: string) => Promise<void>
-  getLatestBuild: (projectId: string, env: EnvironmentType) => BuildRecord | undefined
-  testGitConnection: (config: {
-    repoUrl: string
-    authType: string
-    authToken?: string
-  }) => Promise<boolean>
+  fetchBuilds: (opts?: { silent?: boolean }) => Promise<void>
 }
 
-export const useProjectStore = create<ProjectState>((set, get) => ({
+export const useProjectStore = create<ProjectState>((set) => ({
   projects: [],
   builds: [],
   loading: false,
+  buildsLoading: false,
+  projectsLoaded: false,
 
   fetchProjects: async () => {
     set({ loading: true })
     try {
       const { data } = await api.get('/projects')
-      set({ projects: data, loading: false })
+      set({ projects: data, loading: false, projectsLoaded: true })
     } catch {
       set({ loading: false })
     }
   },
 
-  fetchProjectById: async (id: string) => {
-    set({ loading: true })
+  fetchProjectById: async (id) => {
     try {
       const { data } = await api.get(`/projects/${id}`)
-      set({ loading: false })
       return data
     } catch {
-      set({ loading: false })
       return undefined
     }
   },
 
-  updateProject: async (id: string, config: Partial<ProjectConfig>) => {
-    set({ loading: true })
-    try {
-      const { data } = await api.put(`/projects/${id}`, config)
-      set((state) => ({
-        projects: state.projects.map((p) => (p.id === id ? { ...p, ...data } : p)),
-        loading: false,
-      }))
-    } catch {
-      set({ loading: false })
-    }
+  // 失败时向上抛出，由页面展示错误信息（之前吞掉异常导致失败也提示"保存成功"）
+  updateProject: async (id, config) => {
+    const { data } = await api.put(`/projects/${id}`, config)
+    set((state) => ({
+      projects: state.projects.map((p) => (p.id === id ? { ...p, ...data } : p)),
+    }))
+    return data
   },
 
   createProject: async (config) => {
     const { data } = await api.post('/projects', config)
-    set((state) => ({ projects: [...state.projects, data] }))
+    set((state) => ({ projects: [data, ...state.projects] }))
     return data
   },
 
-  deleteProject: async (id: string) => {
+  deleteProject: async (id) => {
     await api.delete(`/projects/${id}`)
     set((state) => ({
       projects: state.projects.filter((p) => p.id !== id),
@@ -76,29 +67,13 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
     }))
   },
 
-  fetchBuilds: async (projectId?: string) => {
-    set({ loading: true })
+  fetchBuilds: async (opts) => {
+    if (!opts?.silent) set({ buildsLoading: true })
     try {
-      const params = projectId ? { projectId } : {}
-      const { data } = await api.get('/builds', { params })
-      set({ builds: data, loading: false })
+      const { data } = await api.get('/builds')
+      set({ builds: data, buildsLoading: false })
     } catch {
-      set({ loading: false })
-    }
-  },
-
-  getLatestBuild: (projectId: string, env: EnvironmentType) => {
-    return get()
-      .builds.filter((b) => b.projectId === projectId && b.environment === env)
-      .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime())[0]
-  },
-
-  testGitConnection: async ({ repoUrl, authType, authToken }) => {
-    try {
-      const { data } = await api.post('/git/test-connection', { repoUrl, authType, authToken })
-      return data.success
-    } catch {
-      return false
+      set({ buildsLoading: false })
     }
   },
 }))

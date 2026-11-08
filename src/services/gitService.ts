@@ -1,40 +1,23 @@
-import axios from 'axios'
+import api from './serverApi'
 import type { GitAuthType } from '@/types'
 
-const api = axios.create({
-  baseURL: import.meta.env?.VITE_API_BASE_URL || '/api',
-  timeout: 30000,
-})
-
-class GitService {
-  async testConnection(
-    repoUrl: string,
-    authType: GitAuthType,
-    authToken?: string,
-  ): Promise<boolean> {
-    try {
-      const response = await api.post('/git/test-connection', { repoUrl, authType, authToken })
-      return response.data.success
-    } catch {
-      console.error('Git connection test failed')
-      return false
-    }
-  }
-
-  async fetchBranches(
-    repoUrl: string,
-    authType: GitAuthType,
-    authToken?: string,
-    projectId?: string,
-  ): Promise<string[]> {
-    try {
-      const response = await api.post('/git/branches', { repoUrl, authType, authToken, projectId })
-      return response.data.branches || []
-    } catch {
-      return ['main', 'develop', 'feature/test', 'release/v1.0']
-    }
-  }
-
+export interface BranchResult {
+  branches: string[]
+  error?: string
 }
 
-export const gitService = new GitService()
+/**
+ * Git 相关接口。统一走带鉴权的 serverApi：之前这里单独创建了一个不带 Authorization
+ * 的 axios 实例，请求必然 401，又在失败时返回写死的假分支列表，导致用户可能选中
+ * 并不存在的分支去构建。
+ */
+export const gitService = {
+  async fetchBranches(params: {
+    repoUrl: string
+    authType: GitAuthType
+    projectId?: string
+  }): Promise<BranchResult> {
+    const { data } = await api.post('/git/branches', params, { timeout: 60000 })
+    return { branches: data.branches || [], error: data.error }
+  },
+}
