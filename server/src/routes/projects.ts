@@ -37,7 +37,7 @@ router.get('/:id', (req: Request, res: Response) => {
 // POST /api/projects
 router.post('/', (req: Request, res: Response) => {
   const db = getDb()
-  const { name, description, appId, repoUrl, branch, authType, authToken, environments, projectPath } = req.body
+  const { name, description, appId, repoUrl, branch, authType, authToken, environments, projectPath, sshKeyPath } = req.body
 
   if (!name || !appId || !repoUrl) {
     res.status(400).json({ error: '名称、AppID、仓库地址为必填项' })
@@ -55,6 +55,7 @@ router.post('/', (req: Request, res: Response) => {
     authToken,
     environments,
     projectPath,
+    sshKeyPath,
     now: new Date().toISOString(),
   })
 
@@ -71,8 +72,33 @@ router.put('/:id', (req: Request, res: Response) => {
     return
   }
 
+  const {
+    name,
+    description,
+    appId,
+    repoUrl,
+    branch,
+    authType,
+    authToken,
+    environments,
+    projectPath,
+    sshKeyPath,
+  } = req.body || {}
+  if (name !== undefined && !String(name).trim()) {
+    res.status(400).json({ error: '项目名称不能为空' })
+    return
+  }
   const row = updateProject(db, req.params.id, existing, {
-    ...req.body,
+    name,
+    description,
+    appId,
+    repoUrl,
+    branch,
+    authType,
+    authToken,
+    environments,
+    projectPath,
+    sshKeyPath,
     now: new Date().toISOString(),
   })
 

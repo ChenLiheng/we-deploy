@@ -21,7 +21,10 @@ test('runMigrations creates schema and records applied version', () => {
     const migrationCount = (
       db.prepare('SELECT COUNT(*) as count FROM schema_migrations').get() as { count: number }
     ).count
-    assert.equal(migrationCount, 1)
+    assert.equal(migrationCount, 2)
+
+    const buildColumns = db.prepare('PRAGMA table_info(builds)').all() as Array<{ name: string }>
+    assert.equal(buildColumns.some((c) => c.name === 'kind'), true)
   } finally {
     db.close()
   }

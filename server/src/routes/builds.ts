@@ -5,6 +5,12 @@ import { getDb } from '../db/init.js'
 import { startPreview } from '../services/buildWorker.js'
 import { subscribeBuildEvents } from '../services/buildEvents.js'
 import { enqueueBuildTask } from '../services/buildQueue.js'
+import {
+  parseBuildDescription,
+  toBuildResponse,
+  toLogResponse,
+  type BuildRow,
+} from '../mappers/buildMapper.js'
 
 const router = Router()
 
@@ -12,87 +18,43 @@ function generateId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).substring(2, 6)}`
 }
 
-function parseBuildDescription(description: string): { qrcodePath?: string } {
-  try {
-    return JSON.parse(description || '{}')
-  } catch {
-    return {}
-  }
-}
-
 // GET /api/builds
+// 列表不返回日志；支持 ?projectId= / ?iterationId= 过滤，?limit= 限制条数（默认 500）
 router.get('/', (req: Request, res: Response) => {
   const db = getDb()
-  const { projectId } = req.query
+  const { projectId, iterationId } = req.query
+  const limitRaw = Number(req.query.limit)
+  const limit = Number.isInteger(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 2000) : 500
 
-  let rows: any[]
-  if (projectId) {
-    rows = db.prepare('SELECT * FROM builds WHERE project_id = ? ORDER BY start_time DESC').all(projectId) as any[]
-  } else {
-    rows = db.prepare('SELECT * FROM builds ORDER BY start_time DESC').all() as any[]
+  const where: string[] = []
+  const params: unknown[] = []
+  if (typeof projectId === 'string' && projectId) {
+    where.push('project_id = ?')
+    params.push(projectId)
   }
-
-  const builds = rows.map(row => {
-    const descData = parseBuildDescription(row.description)
-    return {
-      id: row.id,
-      projectId: row.project_id,
-      iterationId: row.iteration_id || undefined,
-      environment: row.environment,
-      status: row.status,
-      version: row.version,
-      desc: row.description || undefined,
-      qrcodeUrl: descData.qrcodePath ? `/api/builds/${row.id}/qrcode` : undefined,
-      commitHash: row.commit_hash || undefined,
-      branch: row.branch,
-      logs: [],
-      startTime: row.start_time,
-      endTime: row.end_time || undefined,
-      error: row.error || undefined,
-      triggerBy: row.trigger_by,
-    }
-  })
-
-  res.json(builds)
+  if (typeof iterationId === 'string' && iterationId) {
+    where.push('iteration_id = ?')
+    params.push(iterationId)
+  }
+  const sql = `SELECT * FROM builds ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY start_time DESC LIMIT ?`
+  const rows = db.prepare(sql).all(...params, limit) as BuildRow[]
+  res.json(rows.map((row) => toBuildResponse(row)))
 })
 
 // GET /api/builds/:id
 router.get('/:id', (req: Request, res: Response) => {
   const db = getDb()
-  const row = db.prepare('SELECT * FROM builds WHERE id = ?').get(req.params.id) as any
+  const row = db.prepare('SELECT * FROM builds WHERE id = ?').get(req.params.id) as BuildRow | undefined
 
   if (!row) {
     res.status(404).json({ error: '构建记录不存在' })
     return
   }
 
-  const logs = db.prepare('SELECT * FROM build_logs WHERE build_id = ? ORDER BY timestamp ASC').all(req.params.id) as any[]
-
-  const descData = parseBuildDescription(row.description)
-
-  res.json({
-    id: row.id,
-    projectId: row.project_id,
-    iterationId: row.iteration_id || undefined,
-    environment: row.environment,
-    status: row.status,
-    version: row.version,
-    desc: row.description || undefined,
-    qrcodeUrl: descData.qrcodePath ? `/api/builds/${row.id}/qrcode` : undefined,
-    commitHash: row.commit_hash || undefined,
-    branch: row.branch,
-    logs: logs.map(l => ({
-      id: l.id,
-      timestamp: l.timestamp,
-      level: l.level,
-      message: l.message,
-      source: l.source || undefined,
-    })),
-    startTime: row.start_time,
-    endTime: row.end_time || undefined,
-    error: row.error || undefined,
-    triggerBy: row.trigger_by,
-  })
+  const logs = db
+    .prepare('SELECT * FROM build_logs WHERE build_id = ? ORDER BY timestamp ASC, id ASC')
+    .all(req.params.id) as any[]
+  res.json(toBuildResponse(row, logs))
 })
 
 // GET /api/builds/:id/logs
@@ -120,15 +82,7 @@ router.get('/:id/logs', (req: Request, res: Response) => {
     ? (db.prepare(sql).all(req.params.id, since) as any[])
     : (db.prepare(sql).all(req.params.id) as any[])
 
-  res.json(
-    logs.map((l) => ({
-      id: l.id,
-      timestamp: l.timestamp,
-      level: l.level,
-      message: l.message,
-      source: l.source || undefined,
-    }))
-  )
+  res.json(logs.map(toLogResponse))
 })
 
 // GET /api/builds/:id/logs/stream
@@ -195,13 +149,7 @@ router.get('/:id/logs/stream', (req: Request, res: Response) => {
     .all(buildId, sinceTs) as any[]
   let lastSentTs = sinceTs
   for (const log of history) {
-    sendLog({
-      id: log.id,
-      timestamp: log.timestamp,
-      level: log.level,
-      message: log.message,
-      source: log.source || undefined,
-    })
+    sendLog(toLogResponse(log))
     if (log.timestamp > lastSentTs) lastSentTs = log.timestamp
   }
   sendStatus(build.status, build.end_time || undefined)
@@ -256,35 +204,56 @@ router.get('/:id/logs/stream', (req: Request, res: Response) => {
   res.on('close', cleanup)
 })
 
-// POST /api/builds/:id/preview — trigger preview build
+// POST /api/builds/:id/preview — 基于某次构建的分支/版本生成预览二维码
+// 预览会新建一条 kind='preview' 的构建记录，而不是复用原记录：
+//  - 原上传构建的状态 / 耗时 / 日志保持不变
+//  - 预览失败不会把一次成功的上传覆盖成失败
 router.post('/:id/preview', (req: Request, res: Response) => {
   const db = getDb()
-  const row = db.prepare('SELECT * FROM builds WHERE id = ?').get(req.params.id) as any
+  const source = db.prepare('SELECT * FROM builds WHERE id = ?').get(req.params.id) as BuildRow | undefined
 
-  if (!row) {
+  if (!source) {
     res.status(404).json({ error: '构建记录不存在' })
     return
   }
 
-  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(row.project_id) as any
+  const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(source.project_id) as any
   if (!project) {
     res.status(404).json({ error: '项目不存在' })
     return
   }
 
   const { pagePath } = req.body || {}
+  const buildId = generateId('build')
+  const now = new Date().toISOString()
+
+  db.prepare(`
+    INSERT INTO builds (id, project_id, iteration_id, environment, status, version, description, branch, start_time, trigger_by, kind)
+    VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?, 'preview')
+  `).run(
+    buildId,
+    source.project_id,
+    source.iteration_id || '',
+    source.environment,
+    source.version,
+    JSON.stringify({ sourceBuildId: source.id }),
+    source.branch || '',
+    now,
+    req.user?.username || ''
+  )
 
   // 预览也走同一队列，避免 preview 与 upload 构建同时打满机器资源。
-  // 透传 builds 表中记录的 branch，保证预览拉取的分支与最初构建时一致。
-  enqueueBuildTask(req.params.id, db, () =>
-    startPreview(req.params.id, project, db, {
-      environment: row.environment,
-      pagePath,
-      branch: row.branch,
+  // 透传原构建记录的 branch，保证预览拉取的分支与最初构建时一致。
+  enqueueBuildTask(buildId, db, () =>
+    startPreview(buildId, project, db, {
+      environment: source.environment,
+      pagePath: typeof pagePath === 'string' && pagePath.trim() ? pagePath.trim() : undefined,
+      branch: source.branch,
     })
   )
 
-  res.json({ message: '预览构建已触发', buildId: req.params.id })
+  const row = db.prepare('SELECT * FROM builds WHERE id = ?').get(buildId) as BuildRow
+  res.status(201).json(toBuildResponse(row))
 })
 
 // GET /api/builds/:id/qrcode — serve QR code image
