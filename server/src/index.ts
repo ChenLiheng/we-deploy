@@ -9,7 +9,6 @@ import iterationRoutes from './routes/iterations.js'
 import buildRoutes from './routes/builds.js'
 import settingsRoutes from './routes/settings.js'
 import gitRoutes from './routes/git.js'
-import ciRoutes from './routes/ci.js'
 import authRoutes from './routes/auth.js'
 import { authMiddleware } from './middleware/auth.js'
 import {
@@ -17,6 +16,15 @@ import {
   startBuildRetentionScheduler,
   getLogRetentionDays,
 } from './services/buildRetention.js'
+
+// 生产环境缺少关键密钥时启动即失败，而不是等到登录/保存项目时才返回 500
+if (process.env.NODE_ENV === 'production') {
+  const missing = ['JWT_SECRET', 'APP_ENCRYPTION_KEY'].filter((key) => !process.env[key])
+  if (missing.length > 0) {
+    console.error(`✗ 生产环境缺少必需的环境变量: ${missing.join(', ')}（请在 .env 或 systemd 配置中设置）`)
+    process.exit(1)
+  }
+}
 
 const app = express()
 // 端口与数据库路径都从环境变量读取，便于 Docker / systemd 部署时覆盖默认值；
@@ -142,7 +150,6 @@ app.use('/api/iterations', iterationRoutes)
 app.use('/api/builds', buildRoutes)
 app.use('/api/settings', settingsRoutes)
 app.use('/api/git', gitRoutes)
-app.use('/api/ci', ciRoutes)
 
 // Error handler
 app.use(errorHandler)

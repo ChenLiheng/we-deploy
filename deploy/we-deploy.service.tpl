@@ -17,6 +17,8 @@ User=@SERVICE_USER@
 Group=@SERVICE_USER@
 WorkingDirectory=@INSTALL_DIR@/server
 
+# JWT_SECRET / APP_ENCRYPTION_KEY 由 install.sh 首次安装时生成到该文件（root 读取后注入进程）
+EnvironmentFile=@DATA_DIR@/we-deploy.env
 Environment=NODE_ENV=production
 Environment=PORT=@PORT@
 Environment=HOST=0.0.0.0

@@ -22,7 +22,10 @@
 - **Token / SSH 双认证**：HTTPS Token 一键使用；SSH 私钥也可指定路径。
 - **编译型框架原生支持**：Taro / uni-app / Vue3 等需要先 `npm run build:weapp` 的项目，可在配置里指定 `buildCommand` 与 `miniprogramRoot`，平台会自动在 clone → install → build → upload 的流水线里串起来。
 - **基于 miniprogram-ci**：直接调用官方编译模块，支持上传、预览（含二维码）、构建 npm（packNpm）、机器人编号、ES6/ES7/Minify 等编译开关。
-- **构建日志实时回流**：每次任务的步骤、状态、子包大小、错误堆栈均落库为 build_logs，前端控制台可实时查看。
+- **构建日志实时回流**：每次任务的步骤、状态、子包大小、错误堆栈均落库为 build_logs，前端通过 SSE 实时查看，支持级别筛选、搜索、复制与下载。
+- **预览二维码**：任意一次构建都可以一键生成预览版二维码；预览作为独立的构建记录保存，不会影响原上传记录。
+- **构建结果通知**：在「系统设置」中配置企业微信群机器人 Webhook，构建成功 / 失败自动推送到群里。
+- **构建队列**：全局并发上限可在「系统设置」中调整，超出的构建自动排队。
 - **沙盒自动清理**：构建结束（成功/失败）后自动清理 `/data/sandbox` 临时代码，避免占满磁盘。
 - **凭证脱敏**：日志、API 错误响应中的 token 自动脱敏为 `***:***@host`，避免密钥外泄。
 - **极简部署**：一份 `docker-compose up -d` 即可拉起 web + api 双服务，自带 SQLite 持久化。
@@ -96,8 +99,9 @@ git clone 指定分支
 ## Docker 部署（推荐）
 
 ```bash
-cp .env.example .env       # 按需调整 WE_DEPLOY_PORT / 其它环境变量
+cp .env.example .env       # 必填 JWT_SECRET / APP_ENCRYPTION_KEY（可用 openssl rand -hex 32 生成）
 docker compose up -d --build
+docker compose logs api | grep "Initial admin password"   # 查看初始管理员密码
 ```
 
 启动后访问：`http://<server-ip>:${WE_DEPLOY_PORT:-8000}`。
@@ -116,6 +120,9 @@ docker compose up -d --build
 | `CI_PROC_CWD`       | /tmp/we-deploy/ci-proc | miniprogram-ci 执行时的进程工作目录，其临时/缓存文件写入此处，避免落在项目代码目录                                                |
 | `JWT_SECRET`        | -                  | JWT 签名密钥；生产环境必填                                                                                 |
 | `APP_ENCRYPTION_KEY` | -                 | Git Token、微信 CI 私钥等敏感配置的加密密钥；生产环境必填                                                    |
+| `INITIAL_ADMIN_USERNAME` | admin          | 初始管理员用户名（仅在数据库中没有用户时生效）                                                            |
+| `INITIAL_ADMIN_PASSWORD` | 随机生成       | 初始管理员密码；不设置则随机生成并打印到启动日志                                                          |
+| `MAX_CONCURRENT_BUILDS` | -               | 全局最大并发构建数；设置后覆盖「系统设置」页面中的配置（默认 2）                                          |
 | `LOG_RETENTION_DAYS` | 30                 | 构建记录与控制台日志保留天数；早于该阈值的 `builds` 及关联 `build_logs` 会被删除；设为 `0` 关闭自动清理 |
 | `WE_DEPLOY_PORT`     | 8000               | web 容器对外暴露端口（仅 docker-compose.yml 中使用）                                                    |
 
@@ -152,6 +159,7 @@ journalctl -u we-deploy -f
 | 方法   | 路径                        | 说明                             |
 | ------ | --------------------------- | -------------------------------- |
 | `POST` | `/api/auth/login`           | 登录，返回 JWT                   |
+| `POST` | `/api/auth/change-password` | 修改当前用户密码                 |
 | `GET`  | `/api/projects`             | 列出项目                         |
 | `POST` | `/api/projects`             | 创建项目                         |
 | `PUT`  | `/api/projects/:id`         | 更新项目                         |
@@ -159,9 +167,15 @@ journalctl -u we-deploy -f
 | `POST` | `/api/git/branches`         | 列出远端分支                     |
 | `POST` | `/api/iterations`           | 创建迭代                         |
 | `POST` | `/api/iterations/:id/build` | 触发构建（异步）                 |
+| `PATCH`| `/api/iterations/:id/close` | 关闭迭代（构建中不可关闭）       |
+| `PATCH`| `/api/iterations/:id/reopen`| 重新打开已关闭的迭代             |
+| `GET`  | `/api/builds/:id/logs/stream` | SSE 实时日志                   |
 | `GET`  | `/api/builds/:id/logs`      | 拉取构建日志                     |
-| `POST` | `/api/builds/:id/preview`   | 触发预览构建（生成二维码）       |
+| `POST` | `/api/builds/:id/preview`   | 基于该构建新建一条预览构建（生成二维码） |
 | `GET`  | `/api/builds/:id/qrcode`    | 获取预览二维码图片               |
+| `GET`  | `/api/settings`             | 系统设置 + 运行信息              |
+| `PUT`  | `/api/settings`             | 修改系统设置（仅管理员）         |
+| `POST` | `/api/settings/test-webhook`| 发送测试通知（仅管理员）         |
 
 详见 `server/src/routes/`。
 
@@ -173,8 +187,9 @@ journalctl -u we-deploy -f
 
 - [ ] 多用户 / 多角色（admin / developer / viewer）
 - [ ] 构建任务取消
-- [ ] WebSocket 实时日志推送（替代轮询）
-- [ ] 钉钉 / 企业微信构建结果通知
+- [x] SSE 实时日志推送（轮询兜底）
+- [x] 企业微信构建结果通知
+- [ ] 钉钉 / 飞书通知
 - [ ] 二维码定期清理任务
 - [ ] 单元测试 / e2e 覆盖
 

@@ -1,238 +1,334 @@
-import React, { useEffect } from 'react'
-import { Row, Col, Card, Statistic, Button, Tag, Space } from 'antd'
+import React, { useEffect, useMemo } from 'react'
+import { Row, Col, Card, Button, Space, Empty, Steps, Skeleton, Tooltip } from 'antd'
 import {
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  SyncOutlined,
-  ClockCircleOutlined,
   PlusOutlined,
   SettingOutlined,
-  CloudUploadOutlined,
-  GithubOutlined,
+  RocketOutlined,
+  RightOutlined,
+  WarningOutlined,
+  BranchesOutlined,
 } from '@ant-design/icons'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
+import dayjs from 'dayjs'
 import { useProjectStore } from '@stores/projectStore'
-import type { BuildRecord, BuildStatus } from '@/types'
-import './Dashboard.less'
+import { useAuthStore } from '@stores/authStore'
+import PageHeader from '@components/common/PageHeader'
+import { BuildStatusTag, EnvTag, PreviewTag } from '@components/common/StatusTag'
+import { formatDuration, formatSeconds, fromNow, isRunning } from '@/constants/status'
+import type { BuildRecord, EnvironmentType, ProjectConfig } from '@/types'
 
-// 必须覆盖 BuildStatus 全部状态，
-// 用 Record<BuildStatus, ...> 让 TS 在以后新增状态时编译期就强制提示，
-// 避免之前 `statusConfig[build.status]` 拿到 undefined → `.color` 崩溃整个 Dashboard 的问题。
-// 颜色 / 图标与 BuildHistory 页面保持一致，确保两个页面状态展示统一。
-const statusConfig: Record<BuildStatus, { color: string; icon: React.ReactNode; text: string }> = {
-  pending: { color: '#8b949e', icon: <ClockCircleOutlined />, text: 'PENDING' },
-  queued: { color: '#d29922', icon: <ClockCircleOutlined />, text: 'QUEUED' },
-  cloning: { color: '#58a6ff', icon: <SyncOutlined spin />, text: 'CLONING' },
-  installing: { color: '#58a6ff', icon: <SyncOutlined spin />, text: 'INSTALLING' },
-  building: { color: '#58a6ff', icon: <SyncOutlined spin />, text: 'BUILDING' },
-  uploading: { color: '#bc8cff', icon: <SyncOutlined spin />, text: 'UPLOADING' },
-  success: { color: '#3fb950', icon: <CheckCircleOutlined />, text: 'SUCCESS' },
-  failed: { color: '#ff7b72', icon: <CloseCircleOutlined />, text: 'FAILED' },
+const StatCard: React.FC<{
+  label: string
+  value: React.ReactNode
+  hint?: React.ReactNode
+  tone?: string
+}> = ({ label, value, hint, tone }) => (
+  <Card className="stat-card" variant="borderless">
+    <div className="stat-card__label">{label}</div>
+    <div className="stat-card__value" style={tone ? { color: tone } : undefined}>
+      {value}
+    </div>
+    {hint && <div className="stat-card__hint">{hint}</div>}
+  </Card>
+)
+
+const BuildRow: React.FC<{ build: BuildRecord; projectName: string }> = ({
+  build,
+  projectName,
+}) => {
+  const navigate = useNavigate()
+  return (
+    <button
+      type="button"
+      className="build-row"
+      onClick={() => navigate(`/projects/${build.projectId}/builds/${build.id}`)}
+    >
+      <div className="build-row__main">
+        <div className="build-row__title">
+          <span className="build-row__project">{projectName}</span>
+          <code className="mono">v{build.version}</code>
+          <EnvTag env={build.environment} short />
+          {build.kind === 'preview' && <PreviewTag />}
+        </div>
+        <div className="build-row__meta">
+          <BranchesOutlined /> {build.branch || '-'} · {build.triggerBy || '系统'} ·{' '}
+          {fromNow(build.startTime)}
+          {build.endTime && ` · 耗时 ${formatDuration(build.startTime, build.endTime)}`}
+        </div>
+      </div>
+      <BuildStatusTag status={build.status} />
+    </button>
+  )
 }
 
-// fallback 配置：当后端返回未知/脏状态值时使用，保证 UI 不再因取不到配置崩溃
-const fallbackStatusConfig = {
-  color: '#8b949e',
-  icon: <ClockCircleOutlined />,
-  text: 'UNKNOWN',
+const ProjectCard: React.FC<{
+  project: ProjectConfig
+  latest: Partial<Record<EnvironmentType, BuildRecord>>
+}> = ({ project, latest }) => {
+  const navigate = useNavigate()
+  // 公开仓库不需要 Token，因此只把「上传密钥」视为必需配置
+  const missing: string[] = []
+  if (!project.hasPrivateKey) missing.push('上传密钥')
+  if (project.authType === 'ssh' && !project.sshKeyPath) missing.push('SSH 私钥路径')
+
+  return (
+    <Card className="project-card" variant="borderless">
+      <div className="project-card__head">
+        <div className="project-card__avatar">{project.name.slice(0, 1)}</div>
+        <div className="project-card__title">
+          <Link to={`/projects/${project.id}/config`}>{project.name}</Link>
+          <code className="mono muted">{project.appId}</code>
+        </div>
+        <Tooltip title="项目配置">
+          <Button
+            type="text"
+            icon={<SettingOutlined />}
+            onClick={() => navigate(`/projects/${project.id}/config`)}
+          />
+        </Tooltip>
+      </div>
+
+      {missing.length > 0 && (
+        <Link to={`/projects/${project.id}/config`} className="project-card__warn">
+          <WarningOutlined /> 尚未配置{missing.join('、')}，构建会失败
+        </Link>
+      )}
+
+      <div className="project-card__envs">
+        {(['dev', 'prod'] as EnvironmentType[]).map((env) => {
+          const b = latest[env]
+          return (
+            <div key={env} className="env-cell">
+              <div className="env-cell__head">
+                <EnvTag env={env} />
+                {b ? <BuildStatusTag status={b.status} /> : <span className="muted">暂无构建</span>}
+              </div>
+              <div className="env-cell__meta">
+                {b ? (
+                  <Link to={`/projects/${project.id}/builds/${b.id}`}>
+                    v{b.version} · {fromNow(b.startTime)}
+                  </Link>
+                ) : (
+                  <span className="muted">—</span>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      <Button
+        block
+        icon={<RocketOutlined />}
+        onClick={() => navigate(`/iterations?create=1&projectId=${project.id}`)}
+      >
+        发布新版本
+      </Button>
+    </Card>
+  )
 }
 
 const Dashboard: React.FC = () => {
   const navigate = useNavigate()
-  const { projects, builds, fetchProjects, fetchBuilds } = useProjectStore()
+  const user = useAuthStore((s) => s.user)
+  const { projects, builds, fetchProjects, fetchBuilds, projectsLoaded } = useProjectStore()
 
   useEffect(() => {
     fetchProjects()
     fetchBuilds()
   }, [fetchProjects, fetchBuilds])
 
-  const getLatestBuild = (projectId: string, env: 'dev' | 'prod') => {
-    return builds
-      .filter((b) => b.projectId === projectId && b.environment === env)
-      .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime())[0]
-  }
+  const running = useMemo(() => builds.filter((b) => isRunning(b.status)), [builds])
 
-  const getBuildStatusTag = (build?: BuildRecord) => {
-    if (!build) return <Tag className="geek-tag">NO BUILD</Tag>
-    // 兜底：当 build.status 落在 statusConfig 之外（如后端临时新增状态、脏数据）
-    // 时使用 fallbackStatusConfig，避免直接访问 undefined.color 引发整页崩溃
-    const config = statusConfig[build.status as BuildStatus] ?? fallbackStatusConfig
-    return (
-      <Tag className="geek-tag" style={{ color: config.color, borderColor: config.color }}>
-        {config.icon}
-        <span className="tag-text">{config.text}</span>
-      </Tag>
-    )
-  }
+  // 有构建在跑时每 5 秒静默刷新，状态自动更新
+  useEffect(() => {
+    if (running.length === 0) return
+    const timer = setInterval(() => fetchBuilds({ silent: true }), 5000)
+    return () => clearInterval(timer)
+  }, [running.length, fetchBuilds])
 
-  const handleBuild = (projectId: string, env: 'dev' | 'prod') => {
-    console.log(`Trigger build: ${projectId}, ${env}`)
-  }
+  const projectName = useMemo(() => {
+    const map = new Map(projects.map((p) => [p.id, p.name]))
+    return (id: string) => map.get(id) || '已删除项目'
+  }, [projects])
 
-  const totalBuilds = builds.length
-  const successBuilds = builds.filter((b) => b.status === 'success').length
-  const failedBuilds = builds.filter((b) => b.status === 'failed').length
-  const successRate = totalBuilds > 0 ? Math.round((successBuilds / totalBuilds) * 100) : 0
+  const stats = useMemo(() => {
+    const since = dayjs().subtract(7, 'day')
+    const recent = builds.filter((b) => dayjs(b.startTime).isAfter(since))
+    const finished = recent.filter((b) => b.status === 'success' || b.status === 'failed')
+    const success = finished.filter((b) => b.status === 'success').length
+    const durations = finished
+      .filter((b) => b.status === 'success' && b.endTime && b.kind !== 'preview')
+      .map((b) => dayjs(b.endTime).diff(dayjs(b.startTime), 'second'))
+    const avg = durations.length
+      ? Math.round(durations.reduce((a, c) => a + c, 0) / durations.length)
+      : 0
+    return {
+      recentCount: recent.length,
+      failed: finished.length - success,
+      rate: finished.length ? Math.round((success / finished.length) * 100) : null,
+      avg,
+    }
+  }, [builds])
+
+  const latestByProject = useMemo(() => {
+    const result: Record<string, Partial<Record<EnvironmentType, BuildRecord>>> = {}
+    // builds 已按开始时间倒序，第一次出现即最新；预览构建不计入版本状态
+    for (const b of builds) {
+      if (b.kind === 'preview') continue
+      const entry = (result[b.projectId] ||= {})
+      if (!entry[b.environment]) entry[b.environment] = b
+    }
+    return result
+  }, [builds])
+
+  const recentBuilds = builds.slice(0, 8)
+  const hello = (() => {
+    const h = dayjs().hour()
+    if (h < 6) return '夜深了'
+    if (h < 12) return '早上好'
+    if (h < 18) return '下午好'
+    return '晚上好'
+  })()
 
   return (
-    <div className="dashboard">
-      <div className="dashboard-header">
-        <div className="header-title">
-          <span className="prompt">$</span>
-          <h1>系统概览</h1>
-          <span className="cursor-blink">{'\u2588'}</span>
-        </div>
-        <Button type="primary" icon={<PlusOutlined />} size="large" className="geek-button">
-          新建项目
-        </Button>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="工作台"
+        description={`${hello}，${user?.displayName || user?.username || ''}。这里是所有小程序的发布概况。`}
+        extra={
+          <Space wrap>
+            <Button icon={<PlusOutlined />} onClick={() => navigate('/projects?create=1')}>
+              新建项目
+            </Button>
+            <Button
+              type="primary"
+              icon={<RocketOutlined />}
+              onClick={() => navigate('/iterations?create=1')}
+              disabled={projects.length === 0}
+            >
+              发布新版本
+            </Button>
+          </Space>
+        }
+      />
 
-      <Row gutter={[16, 16]} className="stats-row">
-        <Col xs={24} sm={12} lg={6}>
-          <Card className="stat-card geek-card">
-            <div className="stat-header">
-              <CloudUploadOutlined className="stat-icon" style={{ color: '#3fb950' }} />
-              <span className="stat-label">PROJECTS</span>
-            </div>
-            <Statistic
-              value={projects.length}
-              valueStyle={{
-                color: '#3fb950',
-                fontFamily: 'var(--geek-font-mono)',
-                fontSize: '32px',
-              }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card className="stat-card geek-card">
-            <div className="stat-header">
-              <CloudUploadOutlined className="stat-icon" style={{ color: '#58a6ff' }} />
-              <span className="stat-label">BUILDS</span>
-            </div>
-            <Statistic
-              value={totalBuilds}
-              valueStyle={{
-                color: '#58a6ff',
-                fontFamily: 'var(--geek-font-mono)',
-                fontSize: '32px',
-              }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card className="stat-card geek-card">
-            <div className="stat-header">
-              <CheckCircleOutlined className="stat-icon" style={{ color: '#3fb950' }} />
-              <span className="stat-label">SUCCESS RATE</span>
-            </div>
-            <Statistic
-              value={successRate}
-              suffix="%"
-              valueStyle={{
-                color: successRate > 80 ? '#3fb950' : '#ff7b72',
-                fontFamily: 'var(--geek-font-mono)',
-                fontSize: '32px',
-              }}
-            />
-          </Card>
-        </Col>
-        <Col xs={24} sm={12} lg={6}>
-          <Card className="stat-card geek-card">
-            <div className="stat-header">
-              <CloseCircleOutlined className="stat-icon" style={{ color: '#ff7b72' }} />
-              <span className="stat-label">FAILED</span>
-            </div>
-            <Statistic
-              value={failedBuilds}
-              valueStyle={{
-                color: failedBuilds > 0 ? '#ff7b72' : '#3fb950',
-                fontFamily: 'var(--geek-font-mono)',
-                fontSize: '32px',
-              }}
-            />
-          </Card>
-        </Col>
-      </Row>
+      {!projectsLoaded ? (
+        <Card variant="borderless">
+          <Skeleton active />
+        </Card>
+      ) : projects.length === 0 ? (
+        <Card variant="borderless" className="onboarding">
+          <h2>三步完成第一次发布</h2>
+          <p className="muted">
+            WeDeploy 会拉取你的仓库代码，在服务器上编译并通过 miniprogram-ci 上传到微信后台。
+          </p>
+          <Steps
+            orientation="vertical"
+            current={0}
+            items={[
+              { title: '创建项目', description: '填写小程序 AppID 与 Git 仓库地址' },
+              {
+                title: '配置凭证',
+                description:
+                  '在微信公众平台「开发管理 → 开发设置 → 小程序代码上传」下载上传密钥，并添加服务器 IP 白名单',
+              },
+              {
+                title: '新建迭代并构建',
+                description: '选择分支、版本号和环境，一键上传或生成预览二维码',
+              },
+            ]}
+          />
+          <Button
+            type="primary"
+            size="large"
+            icon={<PlusOutlined />}
+            onClick={() => navigate('/projects?create=1')}
+          >
+            创建第一个项目
+          </Button>
+        </Card>
+      ) : (
+        <>
+          <Row gutter={[16, 16]} className="section">
+            <Col xs={12} lg={6}>
+              <StatCard label="项目" value={projects.length} hint={`共 ${builds.length} 次构建`} />
+            </Col>
+            <Col xs={12} lg={6}>
+              <StatCard
+                label="近 7 天构建"
+                value={stats.recentCount}
+                hint={
+                  stats.failed > 0 ? (
+                    <span className="text-danger">{stats.failed} 次失败</span>
+                  ) : (
+                    '无失败'
+                  )
+                }
+              />
+            </Col>
+            <Col xs={12} lg={6}>
+              <StatCard
+                label="近 7 天成功率"
+                value={stats.rate === null ? '—' : `${stats.rate}%`}
+                tone={stats.rate === null ? undefined : stats.rate >= 80 ? '#07c160' : '#f53f3f'}
+                hint={stats.avg ? `平均耗时 ${formatSeconds(stats.avg)}` : '暂无数据'}
+              />
+            </Col>
+            <Col xs={12} lg={6}>
+              <StatCard
+                label="进行中"
+                value={running.length}
+                tone={running.length ? '#1677ff' : undefined}
+                hint={running.length ? '自动刷新中' : '队列空闲'}
+              />
+            </Col>
+          </Row>
 
-      <div className="section-header">
-        <span className="comment">{'// 项目列表'}</span>
-        <h2>已配置项目</h2>
-      </div>
-
-      <Row gutter={[16, 16]}>
-        {projects.map((project) => {
-          const devBuild = getLatestBuild(project.id, 'dev')
-          const prodBuild = getLatestBuild(project.id, 'prod')
-          return (
-            <Col xs={24} lg={12} key={project.id}>
+          <Row gutter={[16, 16]}>
+            <Col xs={24} xl={14}>
               <Card
-                className="project-card geek-card"
-                title={
-                  <div className="project-card-header">
-                    <GithubOutlined style={{ color: '#58a6ff' }} />
-                    <span className="project-name">{project.name}</span>
-                  </div>
-                }
+                title="最近构建"
+                variant="borderless"
                 extra={
-                  <Button
-                    type="text"
-                    icon={<SettingOutlined />}
-                    className="icon-button"
-                    onClick={() => navigate(`/projects/${project.id}/config`)}
-                  />
+                  <Link to="/builds">
+                    全部 <RightOutlined />
+                  </Link>
                 }
+                className="list-card"
               >
-                <p className="project-desc">{project.description}</p>
-                <div className="project-info">
-                  <div className="info-line">
-                    <span className="comment">{'// AppID'}</span>
-                    <code className="code-text">{project.appId}</code>
-                  </div>
-                  <div className="info-line">
-                    <span className="comment">{'// Repository'}</span>
-                    <code className="code-text">{project.repoUrl}</code>
-                  </div>
-                </div>
-                <div className="build-status">
-                  <div className="env-build dev-env">
-                    <div className="env-header">
-                      <Tag className="env-tag dev">DEV</Tag>
-                      <code className="env-version">{devBuild?.version || 'null'}</code>
-                    </div>
-                    {getBuildStatusTag(devBuild)}
-                    <Space className="env-actions">
-                      <Button
-                        size="small"
-                        className="geek-button-small"
-                        onClick={() => handleBuild(project.id, 'dev')}
-                      >
-                        build
-                      </Button>
-                    </Space>
-                  </div>
-                  <div className="env-build prod-env">
-                    <div className="env-header">
-                      <Tag className="env-tag prod">PROD</Tag>
-                      <code className="env-version">{prodBuild?.version || 'null'}</code>
-                    </div>
-                    {getBuildStatusTag(prodBuild)}
-                    <Space className="env-actions">
-                      <Button
-                        size="small"
-                        className="geek-button-small"
-                        onClick={() => handleBuild(project.id, 'prod')}
-                      >
-                        build
-                      </Button>
-                    </Space>
-                  </div>
-                </div>
+                {recentBuilds.length === 0 ? (
+                  <Empty
+                    description="还没有构建记录，去迭代发布页触发第一次构建吧"
+                    image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  >
+                    <Button type="primary" onClick={() => navigate('/iterations?create=1')}>
+                      发布新版本
+                    </Button>
+                  </Empty>
+                ) : (
+                  recentBuilds.map((b) => (
+                    <BuildRow key={b.id} build={b} projectName={projectName(b.projectId)} />
+                  ))
+                )}
               </Card>
             </Col>
-          )
-        })}
-      </Row>
+            <Col xs={24} xl={10}>
+              <div className="section-title">
+                <span>项目</span>
+                <Link to="/projects">
+                  管理 <RightOutlined />
+                </Link>
+              </div>
+              <div className="project-grid">
+                {projects.map((p) => (
+                  <ProjectCard key={p.id} project={p} latest={latestByProject[p.id] || {}} />
+                ))}
+              </div>
+            </Col>
+          </Row>
+        </>
+      )}
     </div>
   )
 }

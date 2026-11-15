@@ -97,6 +97,19 @@ const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 2,
+    name: 'build_kind',
+    up: (db) => {
+      // kind 区分「上传构建」与「预览构建」：预览不再复用上传构建的记录，
+      // 避免预览失败把一次成功的上传覆盖为失败、以及耗时/开始时间错乱。
+      const columns = db.prepare('PRAGMA table_info(builds)').all() as Array<{ name: string }>
+      if (!columns.some((c) => c.name === 'kind')) {
+        db.exec("ALTER TABLE builds ADD COLUMN kind TEXT NOT NULL DEFAULT 'upload'")
+      }
+      db.exec('CREATE INDEX IF NOT EXISTS idx_builds_project_start ON builds (project_id, start_time)')
+    },
+  },
 ]
 
 export function runMigrations(db: Database.Database): void {

@@ -1,205 +1,277 @@
-import React, { useEffect, useRef, useState } from 'react'
-import { Card, Button, Tag, Space, Image, message } from 'antd'
+import React, { useEffect, useMemo, useState } from 'react'
 import {
-  ReloadOutlined,
-  ClearOutlined,
-  CheckCircleOutlined,
-  CloseCircleOutlined,
-  SyncOutlined,
-  ClockCircleOutlined,
-  QrcodeOutlined,
-} from '@ant-design/icons'
-import { useParams } from 'react-router-dom'
+  Card,
+  Button,
+  Space,
+  Image,
+  Alert,
+  Descriptions,
+  Row,
+  Col,
+  App,
+  Result,
+  Spin,
+  Tooltip,
+  Tag,
+} from 'antd'
+import { ArrowLeftOutlined, QrcodeOutlined, ReloadOutlined, WifiOutlined } from '@ant-design/icons'
+import { useNavigate, useParams, Link } from 'react-router-dom'
 import { useBuildConsoleStore } from '@stores/buildConsoleStore'
-import api from '@services/serverApi'
-import type { BuildStatus } from '@/types'
-import dayjs from 'dayjs'
-import './BuildConsole.less'
+import { useProjectStore } from '@stores/projectStore'
+import { useBuildStream } from '@/hooks/useBuildStream'
+import api, { getErrorMessage } from '@services/serverApi'
+import PageHeader from '@components/common/PageHeader'
+import LogViewer from '@components/common/LogViewer'
+import BuildSteps from '@components/common/BuildSteps'
+import { BuildStatusTag, EnvTag, PreviewTag } from '@components/common/StatusTag'
+import { formatDuration, formatTime, isRunning } from '@/constants/status'
+import type { BuildRecord, BuildStatus } from '@/types'
 
-const statusConfig: Record<BuildStatus, { color: string; icon: React.ReactNode; text: string }> = {
-  pending: { color: '#8b949e', icon: <ClockCircleOutlined />, text: 'PENDING' },
-  queued: { color: '#d29922', icon: <ClockCircleOutlined />, text: 'QUEUED' },
-  cloning: { color: '#58a6ff', icon: <SyncOutlined spin />, text: 'CLONING' },
-  installing: { color: '#58a6ff', icon: <SyncOutlined spin />, text: 'INSTALLING' },
-  building: { color: '#58a6ff', icon: <SyncOutlined spin />, text: 'BUILDING' },
-  uploading: { color: '#bc8cff', icon: <SyncOutlined spin />, text: 'UPLOADING' },
-  success: { color: '#3fb950', icon: <CheckCircleOutlined />, text: 'SUCCESS' },
-  failed: { color: '#ff7b72', icon: <CloseCircleOutlined />, text: 'FAILED' },
-}
-
-const levelColorMap: Record<string, string> = {
-  info: 'var(--geek-text-primary)',
-  warn: 'var(--geek-accent-yellow)',
-  error: 'var(--geek-accent-red)',
-  success: 'var(--geek-accent-green)',
+/** 根据日志推断失败发生在哪个阶段（日志 source 与流水线阶段对应） */
+const SOURCE_TO_STEP: Record<string, BuildStatus> = {
+  git: 'cloning',
+  npm: 'installing',
+  build: 'building',
+  ci: 'uploading',
 }
 
 const BuildConsole: React.FC = () => {
   const { buildId } = useParams<{ projectId: string; buildId: string }>()
-  const { currentBuild, logs, status, transport, fetchBuild, clearConsole } =
-    useBuildConsoleStore()
-  const consoleEndRef = useRef<HTMLDivElement>(null)
+  const navigate = useNavigate()
+  const { message } = App.useApp()
+  const {
+    currentBuild,
+    logs,
+    status,
+    transport,
+    notFound,
+    buildId: streamId,
+    connect,
+    fetchBuild,
+  } = useBuildConsoleStore()
+  const { projects, fetchProjects } = useProjectStore()
   const [previewing, setPreviewing] = useState(false)
+  const [, forceTick] = useState(0)
+
+  useBuildStream(buildId)
+
+  useEffect(() => {
+    if (projects.length === 0) fetchProjects()
+  }, [projects.length, fetchProjects])
+
+  const running = isRunning(status)
+  // 运行中每秒刷新一次耗时显示
+  useEffect(() => {
+    if (!running) return
+    const timer = setInterval(() => forceTick((n) => n + 1), 1000)
+    return () => clearInterval(timer)
+  }, [running])
+
+  const failedAt = useMemo(() => {
+    if (status !== 'failed') return undefined
+    for (let i = logs.length - 1; i >= 0; i--) {
+      const step = SOURCE_TO_STEP[logs[i].source || '']
+      if (step) return step
+    }
+    return undefined
+  }, [status, logs])
+
+  const ready = streamId === buildId && !!currentBuild
+  const build = currentBuild as BuildRecord | null
+  const project = projects.find((p) => p.id === build?.projectId)
 
   const handlePreview = async () => {
-    if (!buildId) return
+    if (!buildId || !build) return
     setPreviewing(true)
     try {
-      await api.post(`/builds/${buildId}/preview`, { pagePath: undefined })
-      message.success('预览构建已触发')
-    } catch {
-      message.error('预览构建触发失败')
+      const { data } = await api.post<BuildRecord>(`/builds/${buildId}/preview`, {})
+      message.success('预览构建已加入队列')
+      navigate(`/projects/${data.projectId}/builds/${data.id}`)
+    } catch (err) {
+      message.error(getErrorMessage(err, '预览触发失败'))
     } finally {
       setPreviewing(false)
     }
   }
 
-  useEffect(() => {
-    if (!buildId) return
+  if (notFound && streamId === buildId) {
+    return (
+      <Result
+        status="404"
+        title="构建记录不存在"
+        subTitle="该记录可能已被保留策略清理或随项目删除"
+        extra={<Button onClick={() => navigate('/builds')}>返回构建记录</Button>}
+      />
+    )
+  }
 
-    // 切换到新的 build 时先清空旧日志和增量游标，避免 lastLogTs 残留
-    // 导致首次拉取走错增量分支、漏掉早期日志
-    clearConsole()
-    fetchBuild(buildId)
+  if (!ready || !build) {
+    return (
+      <div className="fullscreen-center fullscreen-center--inline">
+        <Spin size="large" />
+      </div>
+    )
+  }
 
-    // 启动实时日志通道：SSE 优先，失败自动降级到 2s 轮询
-    // connectStream 内部已经做了首次全量拉取，无需再单独 fetchBuildLogs
-    const disconnect = useBuildConsoleStore.getState().connectStream(buildId)
-    return () => disconnect()
-  }, [buildId, fetchBuild, clearConsole])
-
-  useEffect(() => {
-    consoleEndRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [logs])
-
-  const currentStatus = statusConfig[status] || statusConfig.pending
-  const isTerminal = ['success', 'failed'].includes(status)
+  const isPreview = build.kind === 'preview'
 
   return (
-    <div className="build-console-page">
-      <div className="page-header">
-        <div className="header-title">
-          <span className="prompt">$</span>
-          <h1>构建控制台</h1>
-          <Tag
-            className="status-tag"
-            style={{ color: currentStatus.color, borderColor: currentStatus.color }}
-          >
-            {currentStatus.icon} {currentStatus.text}
-          </Tag>
-          {/* 日志通道角标：用极简样式提示当前是 SSE 还是降级轮询 */}
-          {transport !== 'idle' && (
-            <Tag
-              className="transport-tag"
-              style={{
-                marginLeft: 4,
-                fontFamily: 'var(--geek-font-mono)',
-                fontSize: 10,
-                color:
-                  transport === 'sse'
-                    ? 'var(--geek-accent-green)'
-                    : 'var(--geek-accent-yellow)',
-                borderColor:
-                  transport === 'sse'
-                    ? 'var(--geek-accent-green)'
-                    : 'var(--geek-accent-yellow)',
-              }}
-            >
-              {transport === 'sse' ? 'STREAM' : 'POLLING'}
-            </Tag>
-          )}
-        </div>
-        <Space>
-          {status === 'success' && currentBuild?.qrcodeUrl && (
-            <Button
-              icon={<QrcodeOutlined />}
-              className="geek-button-outline"
-              onClick={() => window.open(currentBuild.qrcodeUrl!, '_blank')}
-            >
-              查看二维码
-            </Button>
-          )}
-          {status === 'success' && !currentBuild?.qrcodeUrl && (
-            <Button
-              icon={<QrcodeOutlined />}
-              className="geek-button"
-              onClick={handlePreview}
-              loading={previewing}
-            >
-              上传预览
-            </Button>
-          )}
+    <div className="page">
+      <PageHeader
+        back={
           <Button
-            icon={<ReloadOutlined />}
-            className="geek-button"
-            onClick={() => {
-              // 刷新：清空 + 重新连接（自动重新走 SSE，断线后切换通道也用这个）
-              if (!buildId) return
-              clearConsole()
-              fetchBuild(buildId)
-              useBuildConsoleStore.getState().connectStream(buildId)
-            }}
-          >
-            刷新
-          </Button>
-          <Button icon={<ClearOutlined />} className="geek-button-outline" onClick={clearConsole}>
-            清空日志
-          </Button>
-        </Space>
-      </div>
+            type="text"
+            icon={<ArrowLeftOutlined />}
+            onClick={() => navigate(-1)}
+            aria-label="返回"
+          />
+        }
+        title={
+          <Space size={8} wrap>
+            <span>
+              {project?.name || '构建详情'} <span className="mono">v{build.version}</span>
+            </span>
+            <EnvTag env={build.environment} />
+            {isPreview && <PreviewTag />}
+            <BuildStatusTag status={status} />
+          </Space>
+        }
+        description={<span className="mono muted">{build.id}</span>}
+        extra={
+          <Space wrap>
+            {!isPreview && !running && (
+              <Tooltip title="使用相同分支和版本生成一个可扫码体验的预览版">
+                <Button icon={<QrcodeOutlined />} onClick={handlePreview} loading={previewing}>
+                  生成预览二维码
+                </Button>
+              </Tooltip>
+            )}
+            {isPreview && !running && (
+              <Button icon={<ReloadOutlined />} onClick={handlePreview} loading={previewing}>
+                重新生成预览
+              </Button>
+            )}
+          </Space>
+        }
+      />
 
-      {status === 'success' && currentBuild?.qrcodeUrl && (
-        <Card className="geek-card qrcode-card" style={{ marginBottom: 16 }}>
-          <div className="qrcode-container" style={{ textAlign: 'center', padding: 16 }}>
-            <div style={{ fontFamily: 'var(--geek-font-mono)', fontSize: 12, color: 'var(--geek-text-secondary)', marginBottom: 12 }}>
-              $ 预览二维码
-            </div>
-            <Image
-              src={currentBuild.qrcodeUrl}
-              alt="预览二维码"
-              width={280}
-              style={{ border: '1px solid var(--geek-border-color)', borderRadius: 8 }}
-            />
-          </div>
-        </Card>
+      <Card variant="borderless" className="section">
+        <BuildSteps status={status} failedAt={failedAt} size="medium" kind={build.kind} />
+      </Card>
+
+      {status === 'failed' && build.error && (
+        <Alert
+          className="section"
+          type="error"
+          showIcon
+          title="构建失败"
+          description={build.error}
+        />
       )}
 
-      <Card className="console-card">
-        <div className="console-header">
-          <div className="console-dots">
-            <span className="dot red"></span>
-            <span className="dot yellow"></span>
-            <span className="dot green"></span>
-          </div>
-          <span className="console-title">build-output — bash</span>
-        </div>
-        <div className="console-body">
-          {logs.length === 0 && (
-            <div className="console-empty">
-              <span className="prompt-line">
-                <span className="prompt-char">$</span> 等待构建指令...
-              </span>
-              <span className="cursor-blink">{'█'}</span>
-            </div>
-          )}
-          {logs.map((log) => (
-            <div key={log.id} className={`log-line ${log.level}`}>
-              <span className="log-time">
-                [{dayjs(log.timestamp).format('HH:mm:ss')}]
-              </span>
-              {log.source && <span className="log-source">[{log.source}]</span>}
-              <span className="log-message" style={{ color: levelColorMap[log.level] }}>
-                {log.message}
-              </span>
-            </div>
-          ))}
-          {!isTerminal && logs.length > 0 && (
-            <div className="streaming-indicator">
-              <span className="cursor-blink">{'█'}</span>
-            </div>
-          )}
-          <div ref={consoleEndRef} />
-        </div>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} xl={build.qrcodeUrl ? 16 : 24}>
+          <Card variant="borderless" className="section">
+            <Descriptions
+              size="small"
+              column={{ xs: 1, sm: 2, lg: 3 }}
+              items={[
+                {
+                  key: 'project',
+                  label: '项目',
+                  children: project ? (
+                    <Link to={`/projects/${project.id}/config`}>{project.name}</Link>
+                  ) : (
+                    '-'
+                  ),
+                },
+                {
+                  key: 'branch',
+                  label: '分支',
+                  children: <span className="mono">{build.branch || '-'}</span>,
+                },
+                {
+                  key: 'commit',
+                  label: 'Commit',
+                  children: <span className="mono">{build.commitHash?.slice(0, 7) || '-'}</span>,
+                },
+                { key: 'trigger', label: '触发人', children: build.triggerBy || '系统' },
+                {
+                  key: 'start',
+                  label: '开始时间',
+                  children: formatTime(build.startTime, 'YYYY-MM-DD HH:mm:ss'),
+                },
+                {
+                  key: 'duration',
+                  label: '耗时',
+                  children: formatDuration(build.startTime, running ? undefined : build.endTime),
+                },
+                ...(build.sourceBuildId
+                  ? [
+                      {
+                        key: 'source',
+                        label: '来源构建',
+                        children: (
+                          <Link
+                            className="mono"
+                            to={`/projects/${build.projectId}/builds/${build.sourceBuildId}`}
+                          >
+                            {build.sourceBuildId}
+                          </Link>
+                        ),
+                      },
+                    ]
+                  : []),
+              ]}
+            />
+          </Card>
+        </Col>
+        {build.qrcodeUrl && status === 'success' && (
+          <Col xs={24} xl={8}>
+            <Card variant="borderless" className="section qrcode-card" title="预览二维码">
+              <Image src={build.qrcodeUrl} alt="预览二维码" width={200} />
+              <p className="muted">使用微信扫码体验预览版，二维码有效期以微信官方为准。</p>
+            </Card>
+          </Col>
+        )}
+      </Row>
+
+      <Card
+        variant="borderless"
+        title="构建日志"
+        extra={
+          <Space size={8}>
+            {transport !== 'idle' && (
+              <Tag
+                variant="filled"
+                color={transport === 'sse' ? 'success' : 'warning'}
+                icon={<WifiOutlined />}
+              >
+                {transport === 'sse' ? '实时' : '轮询'}
+              </Tag>
+            )}
+            <Tooltip title="重新连接并加载完整日志">
+              <Button
+                size="small"
+                icon={<ReloadOutlined />}
+                onClick={() => {
+                  if (!buildId) return
+                  connect(buildId)
+                  fetchBuild(buildId)
+                }}
+              />
+            </Tooltip>
+          </Space>
+        }
+        styles={{ body: { padding: 0 } }}
+      >
+        <LogViewer
+          logs={logs}
+          running={running}
+          height="max(420px, calc(100vh - 520px))"
+          emptyText={status === 'queued' ? '排队中，等待空闲构建槽位…' : '暂无日志'}
+          fileName={`${build.id}.log`}
+        />
       </Card>
     </div>
   )

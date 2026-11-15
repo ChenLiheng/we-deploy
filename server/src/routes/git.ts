@@ -43,9 +43,27 @@ function getToken(req: Request): string {
   return ''
 }
 
+/** SSH 私钥路径：优先请求体，其次项目已保存的配置 */
+function getSshKeyPath(req: Request): string | undefined {
+  const { sshKeyPath, projectId } = req.body
+  if (sshKeyPath) return sshKeyPath
+  if (projectId) {
+    const project = getDb()
+      .prepare('SELECT ssh_key_path FROM projects WHERE id = ?')
+      .get(projectId) as any
+    return project?.ssh_key_path || undefined
+  }
+  return undefined
+}
+
+function toGitErrorMessage(err: any): string {
+  return redactCredentials(String(err?.message || err)).replace(/^fatal:\s*/, '').trim()
+}
+
 // POST /api/git/test-connection
 router.post('/test-connection', async (req: Request, res: Response) => {
-  const { repoUrl, authType, sshKeyPath } = req.body
+  const { repoUrl, authType } = req.body
+  const sshKeyPath = getSshKeyPath(req)
 
   if (!repoUrl) {
     res.status(400).json({ success: false, error: '仓库地址不能为空' })
@@ -62,14 +80,14 @@ router.post('/test-connection', async (req: Request, res: Response) => {
     }
     res.json({ success: true })
   } catch (err: any) {
-    const message = redactCredentials(String(err?.message || err)).replace(/^fatal:\s*/, '')
-    res.json({ success: false, error: message })
+    res.json({ success: false, error: toGitErrorMessage(err) })
   }
 })
 
 // POST /api/git/branches
 router.post('/branches', async (req: Request, res: Response) => {
-  const { repoUrl, authType, sshKeyPath } = req.body
+  const { repoUrl, authType } = req.body
+  const sshKeyPath = getSshKeyPath(req)
 
   if (!repoUrl) {
     res.status(400).json({ error: '仓库地址不能为空' })
@@ -92,8 +110,9 @@ router.post('/branches', async (req: Request, res: Response) => {
         return ref.replace('refs/heads/', '')
       })
     res.json({ branches })
-  } catch {
-    res.json({ branches: [] })
+  } catch (err: any) {
+    // 返回可读的错误原因，前端据此提示用户并允许手动输入分支名
+    res.json({ branches: [], error: toGitErrorMessage(err) })
   }
 })
 

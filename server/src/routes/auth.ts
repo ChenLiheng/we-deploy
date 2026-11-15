@@ -115,4 +115,36 @@ router.get('/me', authMiddleware, (req: Request, res: Response) => {
   })
 })
 
+// POST /api/auth/change-password
+router.post('/change-password', authMiddleware, (req: Request, res: Response) => {
+  const db = getDb()
+  const { currentPassword, newPassword } = req.body || {}
+
+  if (!currentPassword || !newPassword) {
+    res.status(400).json({ error: '请输入当前密码和新密码' })
+    return
+  }
+  if (String(newPassword).length < 8) {
+    res.status(400).json({ error: '新密码至少 8 位' })
+    return
+  }
+
+  const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user!.userId) as any
+  if (!user) {
+    res.status(404).json({ error: '用户不存在' })
+    return
+  }
+  if (!bcrypt.compareSync(String(currentPassword), user.password)) {
+    res.status(400).json({ error: '当前密码不正确' })
+    return
+  }
+
+  db.prepare('UPDATE users SET password = ?, updated_at = ? WHERE id = ?').run(
+    bcrypt.hashSync(String(newPassword), 10),
+    new Date().toISOString(),
+    user.id
+  )
+  res.json({ success: true })
+})
+
 export default router

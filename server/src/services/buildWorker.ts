@@ -10,6 +10,7 @@ import {
 } from '../utils/gitAuth.js'
 import { decryptSecret } from '../utils/secretVault.js'
 import { emitBuildLog, emitBuildStatus, type BuildLogEvent } from './buildEvents.js'
+import { notifyBuildFinished } from './notifications.js'
 
 /**
  * sandbox 根目录：所有 git clone 出来的临时代码、二维码图片都放在这里。
@@ -138,6 +139,22 @@ interface EnvironmentEntry {
  * 注意：better-sqlite3 是同步 API，emitBuildLog 也是同步触发监听器，
  * 所以这两步之间没有 await 切换点，订阅方 timestamp 不会乱序。
  */
+let lastLogTimestamp = 0
+
+/**
+ * 进程内严格单调递增的日志时间戳（毫秒）。
+ *
+ * 日志游标（SSE Last-Event-ID / 轮询 since / 前端去重）都依赖 `timestamp > since`
+ * 的严格大于判断。子进程输出一次 data 事件往往包含多行，同一毫秒内会写入多条日志，
+ * 如果直接用 Date.now()，同毫秒的后续日志会被 SSE 推送端和前端去重逻辑当成"已发送"丢弃。
+ * 这里保证每条日志的 timestamp 都比上一条大，最多比真实时间超前几毫秒。
+ */
+function nextLogTimestamp(): number {
+  const now = Date.now()
+  lastLogTimestamp = now > lastLogTimestamp ? now : lastLogTimestamp + 1
+  return lastLogTimestamp
+}
+
 function insertLog(
   db: Database.Database,
   buildId: string,
@@ -146,7 +163,7 @@ function insertLog(
   src: string
 ): void {
   const id = generateId('log')
-  const timestamp = Date.now()
+  const timestamp = nextLogTimestamp()
   db.prepare(
     'INSERT INTO build_logs (id, build_id, timestamp, level, message, source) VALUES (?, ?, ?, ?, ?, ?)'
   ).run(id, buildId, timestamp, level, msg, src)
@@ -192,6 +209,26 @@ function finishBuildStatus(
     db.prepare('UPDATE builds SET error = ? WHERE id = ?').run(error, buildId)
   }
   emitBuildStatus(buildId, status, endTime, error)
+  // 构建结果通知（企业微信机器人等）：异步发送，失败只记控制台，不影响构建结果
+  notifyBuildFinished(db, buildId).catch((err) => {
+    console.error(`Build ${buildId} notification failed:`, err)
+  })
+}
+
+/**
+ * 统一把项目配置里的编译开关转换为 miniprogram-ci 的 setting，上传与预览共用，
+ * 避免预览时忽略项目配置（之前预览固定 es6/es7=true）。
+ */
+function toCiSetting(setting: EnvironmentEntry['setting'] = {}) {
+  return {
+    es6: setting.es6 !== false,
+    es7: setting.es7 !== false,
+    minify: setting.minify === true,
+    minifyJS: setting.minifyJS === true,
+    minifyWXML: setting.minifyWXML === true,
+    minifyWXSS: setting.minifyWXSS === true,
+    codeProtect: setting.codeProtect === true,
+  }
 }
 
 /**
@@ -634,8 +671,9 @@ export async function startBuild(
   db: Database.Database,
   extra?: { version?: string; environment?: string; branch?: string }
 ) {
+  // 仅把仍处于 building 的迭代恢复为 active：构建期间迭代可能已被关闭，不能被"复活"
   const updateIteration = db.prepare(
-    'UPDATE iterations SET status = ?, updated_at = ? WHERE build_id = ?'
+    "UPDATE iterations SET status = ?, updated_at = ? WHERE build_id = ? AND status = 'building'"
   )
 
   logInfo(db, buildId, '构建任务已启动', 'system')
@@ -714,15 +752,7 @@ export async function startBuild(
         version,
         desc: `WeDeploy 自动构建 - ${extra?.environment || 'dev'}`,
         robot,
-        setting: {
-          es6: setting.es6 !== false,
-          es7: setting.es7 !== false,
-          minify: setting.minify === true,
-          minifyJS: setting.minifyJS === true,
-          minifyWXML: setting.minifyWXML === true,
-          minifyWXSS: setting.minifyWXSS === true,
-          codeProtect: setting.codeProtect === true,
-        },
+        setting: toCiSetting(setting),
         onProgressUpdate: (task) => {
           const msg = typeof task === 'string' ? task : task.message
           const tid = typeof task === 'string' ? '' : task.id
@@ -832,15 +862,20 @@ export async function startPreview(
         qrcodeFormat: 'image',
         qrcodeOutputDest,
         pagePath: extra?.pagePath,
-        setting: {
-          es6: true,
-          es7: true,
-        },
+        setting: toCiSetting(envConfig.setting),
       })
     })
 
+    // 保留 description 中已有字段（如 sourceBuildId），只补充二维码路径
+    const prevDesc = (() => {
+      try {
+        return JSON.parse(build?.description || '{}')
+      } catch {
+        return {}
+      }
+    })()
     db.prepare('UPDATE builds SET description = ? WHERE id = ?')
-      .run(JSON.stringify({ qrcodePath: qrcodeOutputDest }), buildId)
+      .run(JSON.stringify({ ...prevDesc, qrcodePath: qrcodeOutputDest }), buildId)
 
     logSuccess(db, buildId, `预览二维码已生成: ${qrcodeOutputDest}`, 'ci')
     if (result.subPackageInfo) {

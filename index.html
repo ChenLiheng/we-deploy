@@ -2,20 +2,14 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>WeDeploy - 微信小程序自动化打包与发布平台</title>
-    <!--
-      字体改为浏览器运行时按需加载，避免 less @import 在 vite build 阶段
-      主动拉取 Google Fonts，导致离线 / 内网 / 墙后构建失败。
-      crossorigin 属性是 Google Fonts 推荐写法，便于浏览器复用 CORS 字体资源。
-    -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap"
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2307c160'/%3E%3Cpath d='M9 17.5 14 22l9-11' fill='none' stroke='white' stroke-width='3' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"
     />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#07c160" />
+    <title>WeDeploy · 小程序发布平台</title>
+    <!-- 使用系统字体：不依赖 Google Fonts，内网 / 国内网络环境下首屏不再被外链字体阻塞 -->
   </head>
   <body>
     <div id="root"></div>

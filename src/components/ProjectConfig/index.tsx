@@ -1,351 +1,516 @@
-import React, { useEffect, useState, useCallback } from 'react'
-import { Card, Form, Input, Select, Switch, Button, Tabs, message, Spin } from 'antd'
-import { SaveOutlined, ApiOutlined, BranchesOutlined } from '@ant-design/icons'
-import { useParams, useNavigate } from 'react-router-dom'
-import { useProjectStore } from '@stores/projectStore'
-import api from '@services/serverApi'
-import type { ProjectConfig as ProjectConfigType, GitAuthType } from '@/types'
-import './ProjectConfig.less'
+import React, { useEffect, useRef, useState } from 'react'
+import {
+  Card,
+  Form,
+  Input,
+  Select,
+  Switch,
+  Button,
+  Tabs,
+  Spin,
+  Radio,
+  Alert,
+  Row,
+  Col,
+  Result,
+  Space,
+  App,
+  Tag,
+} from 'antd'
+import {
+  SaveOutlined,
+  ApiOutlined,
+  BranchesOutlined,
+  ArrowLeftOutlined,
+  UploadOutlined,
+  CheckCircleFilled,
+} from '@ant-design/icons'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
+import { useProjectStore, type ProjectInput } from '@stores/projectStore'
+import api, { getErrorMessage } from '@services/serverApi'
+import PageHeader from '@components/common/PageHeader'
+import type { ProjectConfig as ProjectConfigType, EnvironmentType } from '@/types'
+
+const ROBOT_OPTIONS = Array.from({ length: 30 }, (_, i) => ({
+  label: `机器人 ${i + 1}`,
+  value: i + 1,
+}))
+const TABS = ['basic', 'git', 'ci', 'env'] as const
+
+function toFormValues(p: ProjectConfigType) {
+  const env = p.environments || {}
+  return {
+    name: p.name,
+    description: p.description,
+    appId: p.appId,
+    repoUrl: p.repoUrl,
+    branch: p.branch,
+    authType: p.authType,
+    sshKeyPath: p.sshKeyPath,
+    authToken: undefined,
+    privateKey: undefined,
+    projectPath: p.projectPath,
+    installCommand: env.installCommand,
+    buildCommand: env.buildCommand,
+    miniprogramRoot: env.miniprogramRoot,
+    npmBuild: !!env.npmBuild,
+    dev: {
+      robot: env.dev?.robot ?? 1,
+      setting: { es6: true, es7: true, minify: false, ...env.dev?.setting },
+    },
+    prod: {
+      robot: env.prod?.robot ?? 2,
+      setting: { es6: true, es7: true, minify: true, ...env.prod?.setting },
+    },
+  }
+}
+
+const EnvSection: React.FC<{ env: EnvironmentType }> = ({ env }) => (
+  <Card
+    size="small"
+    title={env === 'dev' ? '开发版（DEV）' : '正式版（PROD）'}
+    className="env-config-card"
+    extra={
+      <Tag color={env === 'dev' ? 'blue' : 'orange'} variant="filled">
+        {env.toUpperCase()}
+      </Tag>
+    }
+  >
+    <Form.Item
+      name={[env, 'robot']}
+      label="CI 机器人"
+      tooltip="微信后台按机器人区分上传者，同一机器人的新上传会覆盖其上一个开发版本"
+    >
+      <Select options={ROBOT_OPTIONS} />
+    </Form.Item>
+    <div className="switch-list">
+      <Form.Item name={[env, 'setting', 'es6']} label="ES6 转 ES5" valuePropName="checked">
+        <Switch size="small" />
+      </Form.Item>
+      <Form.Item name={[env, 'setting', 'es7']} label="增强编译" valuePropName="checked">
+        <Switch size="small" />
+      </Form.Item>
+      <Form.Item name={[env, 'setting', 'minify']} label="代码压缩" valuePropName="checked">
+        <Switch size="small" />
+      </Form.Item>
+      <Form.Item name={[env, 'setting', 'codeProtect']} label="代码保护" valuePropName="checked">
+        <Switch size="small" />
+      </Form.Item>
+    </div>
+  </Card>
+)
 
 const ProjectConfig: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>()
   const navigate = useNavigate()
-  const { fetchProjectById, updateProject, loading } = useProjectStore()
+  const [params, setParams] = useSearchParams()
+  const { message } = App.useApp()
+  const { fetchProjectById, updateProject } = useProjectStore()
   const [project, setProject] = useState<ProjectConfigType | null>(null)
+  const [notFound, setNotFound] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [dirty, setDirty] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
   const [form] = Form.useForm()
-  const [testingConnection, setTestingConnection] = useState(false)
+  const fileInput = useRef<HTMLInputElement>(null)
+  const authType = Form.useWatch('authType', form)
+
+  const tabParam = params.get('tab')
+  const activeTab = (TABS as readonly string[]).includes(tabParam || '')
+    ? (tabParam as string)
+    : 'basic'
 
   useEffect(() => {
-    if (projectId) {
-      fetchProjectById(projectId).then((p) => {
-        if (p) {
-          setProject(p)
-          form.setFieldsValue({
-            name: p.name,
-            description: p.description,
-            appId: p.appId,
-            repoUrl: p.repoUrl,
-            branch: p.branch,
-            authType: p.authType,
-            devRobot: p.environments.dev?.robot,
-            devEs6: p.environments.dev?.setting?.es6,
-            devEs7: p.environments.dev?.setting?.es7,
-            devMinify: p.environments.dev?.setting?.minify,
-            prodRobot: p.environments.prod?.robot,
-            prodEs6: p.environments.prod?.setting?.es6,
-            prodEs7: p.environments.prod?.setting?.es7,
-            prodMinify: p.environments.prod?.setting?.minify,
-            privateKey: undefined,
-            // 编译型小程序框架支持：installCommand / buildCommand / miniprogramRoot / npmBuild
-            installCommand: p.environments.installCommand,
-            buildCommand: p.environments.buildCommand,
-            miniprogramRoot: p.environments.miniprogramRoot,
-            npmBuild: p.environments.npmBuild,
-            projectPath: p.projectPath,
-          })
-        }
-      })
-    }
+    if (!projectId) return
+    fetchProjectById(projectId).then((p) => {
+      if (!p) {
+        setNotFound(true)
+        return
+      }
+      setProject(p)
+      form.setFieldsValue(toFormValues(p))
+    })
   }, [projectId, fetchProjectById, form])
 
-  const handleSave = useCallback(async () => {
+  const handleSave = async () => {
     if (!projectId) return
     try {
-      const values = await form.validateFields()
-      // Only send authToken if user actually entered a new value
-      const updateData: any = {
-        name: values.name,
-        description: values.description,
-        appId: values.appId,
-        repoUrl: values.repoUrl,
-        branch: values.branch,
-        authType: values.authType,
-        projectPath: values.projectPath,
-      }
-      if (values.authToken) {
-        updateData.authToken = values.authToken
-      }
-      updateData.environments = {
-        ...(values.privateKey ? { private_key: values.privateKey } : {}),
-        // 编译型小程序框架（Taro/uni-app 等）所需字段：
-        //  - installCommand：自定义依赖安装命令（pnpm/yarn 项目用）
-        //  - buildCommand：clone 后执行的编译命令，例如 'npm run build:weapp'
-        //  - miniprogramRoot：编译产物所在的小程序根目录（相对仓库根，如 'dist/weapp'）
-        //  - npmBuild：是否调用 miniprogram-ci.packNpm 构建小程序 npm
-        installCommand: values.installCommand,
-        buildCommand: values.buildCommand,
-        miniprogramRoot: values.miniprogramRoot,
-        npmBuild: values.npmBuild,
-        dev: {
-          robot: values.devRobot,
-          setting: {
-            es6: values.devEs6,
-            es7: values.devEs7,
-            minify: values.devMinify,
-          },
-        },
-        prod: {
-          robot: values.prodRobot,
-          setting: {
-            es6: values.prodEs6,
-            es7: values.prodEs7,
-            minify: values.prodMinify,
-          },
-        },
-      }
-      await updateProject(projectId, updateData)
-      message.success('项目配置已保存')
+      await form.validateFields()
     } catch {
-      /* 表单校验失败 */
+      message.error('请检查标红的字段')
+      return
     }
-  }, [projectId, form, updateProject])
+    // getFieldsValue(true) 取全部字段（含未激活 Tab），避免保存时把没打开过的 Tab 的配置清空
+    const v = form.getFieldsValue(true)
+    const payload: ProjectInput = {
+      name: v.name?.trim(),
+      description: v.description || '',
+      appId: v.appId?.trim(),
+      repoUrl: v.repoUrl?.trim(),
+      branch: v.branch?.trim() || 'main',
+      authType: v.authType,
+      sshKeyPath: v.sshKeyPath?.trim() || '',
+      projectPath: v.projectPath?.trim() || '',
+      environments: {
+        ...(v.privateKey?.trim() ? { private_key: v.privateKey.trim() } : {}),
+        installCommand: v.installCommand?.trim() || '',
+        buildCommand: v.buildCommand?.trim() || '',
+        miniprogramRoot: v.miniprogramRoot?.trim() || '',
+        npmBuild: !!v.npmBuild,
+        dev: v.dev,
+        prod: v.prod,
+      },
+    }
+    if (v.authToken) payload.authToken = v.authToken
 
-  const handleTestConnection = useCallback(async () => {
-    setTestingConnection(true)
+    setSaving(true)
     try {
-      const values = form.getFieldsValue()
-      // Prefer token user just typed; fall back to projectId for DB lookup
-      const payload: any = {
-        repoUrl: values.repoUrl,
-        authType: values.authType,
-      }
-      if (values.authType === 'ssh') {
-        payload.sshKeyPath = values.sshKeyPath
-      } else if (values.authToken) {
-        payload.authToken = values.authToken
-      } else if (projectId) {
-        payload.projectId = projectId
-      }
-      const { data } = await api.post('/git/test-connection', payload)
-      if (data.success) {
-        message.success('Git 连接测试成功')
-      } else {
-        message.error(data.error || 'Git 连接测试失败')
-      }
-    } catch (err: any) {
-      const errorMsg = err?.response?.data?.error || err?.message || 'Git 连接测试失败'
-      message.error(errorMsg)
+      const updated = await updateProject(projectId, payload)
+      setProject(updated)
+      form.setFieldsValue({ authToken: undefined, privateKey: undefined })
+      setDirty(false)
+      message.success('配置已保存')
+    } catch (err) {
+      message.error(getErrorMessage(err, '保存失败'))
     } finally {
-      setTestingConnection(false)
+      setSaving(false)
     }
-  }, [form, projectId])
+  }
+
+  const handleTestConnection = async () => {
+    const v = form.getFieldsValue(true)
+    if (!v.repoUrl) {
+      message.warning('请先填写仓库地址')
+      return
+    }
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const { data } = await api.post(
+        '/git/test-connection',
+        {
+          repoUrl: v.repoUrl,
+          authType: v.authType,
+          sshKeyPath: v.authType === 'ssh' ? v.sshKeyPath : undefined,
+          authToken: v.authType === 'token' ? v.authToken : undefined,
+          projectId,
+        },
+        { timeout: 60000 },
+      )
+      setTestResult(
+        data.success
+          ? { ok: true, msg: '连接成功，仓库可访问' }
+          : { ok: false, msg: data.error || '连接失败' },
+      )
+    } catch (err) {
+      setTestResult({ ok: false, msg: getErrorMessage(err, '连接失败') })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  const handleKeyFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    if (file.size > 32 * 1024) {
+      message.error('文件过大，请确认选择的是小程序上传密钥（.key）')
+      return
+    }
+    file.text().then((text) => {
+      if (!text.includes('PRIVATE KEY')) {
+        message.warning('文件内容不像私钥，请确认')
+      }
+      form.setFieldValue('privateKey', text)
+      setDirty(true)
+    })
+  }
+
+  if (notFound) {
+    return (
+      <Result
+        status="404"
+        title="项目不存在"
+        subTitle="该项目可能已被删除"
+        extra={<Button onClick={() => navigate('/projects')}>返回项目列表</Button>}
+      />
+    )
+  }
 
   if (!project) {
     return (
-      <div className="project-config-page loading">
+      <div className="fullscreen-center fullscreen-center--inline">
         <Spin size="large" />
       </div>
     )
   }
 
+  const issues: Array<{ text: string; tab: string }> = []
+  if (!project.hasPrivateKey) issues.push({ text: '未配置小程序上传密钥', tab: 'ci' })
+  if (project.authType === 'ssh' && !project.sshKeyPath)
+    issues.push({ text: '未配置 SSH 私钥路径', tab: 'git' })
+
   const tabItems = [
     {
       key: 'basic',
-      label: '基础配置',
+      label: '基本信息',
       children: (
-        <div className="config-section">
+        <div className="form-section">
           <Form.Item
             name="name"
             label="项目名称"
-            rules={[{ required: true, message: '请输入项目名称' }]}
+            rules={[{ required: true, whitespace: true, message: '请输入项目名称' }]}
           >
-            <Input placeholder="项目名称" />
-          </Form.Item>
-          <Form.Item name="description" label="项目描述">
-            <Input.TextArea placeholder="项目描述" rows={3} />
+            <Input maxLength={50} />
           </Form.Item>
           <Form.Item
             name="appId"
-            label="微信 AppID"
-            rules={[{ required: true, message: '请输入微信 AppID' }]}
+            label="小程序 AppID"
+            rules={[
+              { required: true, message: '请输入 AppID' },
+              { pattern: /^wx[0-9a-f]{16}$/i, message: 'AppID 格式应为 wx 开头的 18 位字符' },
+            ]}
           >
-            <Input placeholder="wx1234567890abcdef" />
+            <Input className="mono" />
+          </Form.Item>
+          <Form.Item name="description" label="描述">
+            <Input.TextArea rows={3} maxLength={200} showCount />
           </Form.Item>
         </div>
       ),
     },
     {
       key: 'git',
-      label: 'Git 配置',
+      label: '代码仓库',
       children: (
-        <div className="config-section">
+        <div className="form-section">
           <Form.Item
             name="repoUrl"
             label="仓库地址"
-            rules={[{ required: true, message: '请输入仓库地址' }]}
+            rules={[{ required: true, whitespace: true, message: '请输入仓库地址' }]}
           >
-            <Input
-              prefix={<BranchesOutlined />}
-              placeholder="https://github.com/example/repo.git"
-            />
+            <Input className="mono" placeholder="https://github.com/org/repo.git" />
           </Form.Item>
-          <Form.Item name="branch" label="默认分支">
-            <Input placeholder="main" />
+          <Form.Item name="branch" label="默认分支" extra="迭代中选择的分支优先于这里的默认分支">
+            <Input prefix={<BranchesOutlined />} placeholder="main" />
           </Form.Item>
           <Form.Item name="authType" label="认证方式">
-            <Select
+            <Radio.Group
+              optionType="button"
               options={[
-                { label: 'Token 认证', value: 'token' as GitAuthType },
-                { label: 'SSH 密钥', value: 'ssh' as GitAuthType },
+                { label: 'HTTPS + Token', value: 'token' },
+                { label: 'SSH 密钥', value: 'ssh' },
               ]}
             />
           </Form.Item>
-          <Form.Item
-            noStyle
-            shouldUpdate={(prev, next) => prev.authType !== next.authType}
-          >
-            {({ getFieldValue }) =>
-              getFieldValue('authType') === 'ssh' ? (
-                <Form.Item name="sshKeyPath" label="SSH 私钥路径">
-                  <Input placeholder="/root/.ssh/id_rsa" />
-                </Form.Item>
-              ) : (
-                <Form.Item name="authToken" label="Access Token" extra="Token 仅存储在后端，保存后不再返回前端">
-                  <Input.Password
-                    placeholder={project?.hasAuthToken ? '已配置（不修改请留空）' : 'ghp_xxxxxxxxxxxx'}
-                  />
-                </Form.Item>
-              )
-            }
-          </Form.Item>
-          <Button
-            icon={<ApiOutlined />}
-            className="test-btn"
-            onClick={handleTestConnection}
-            loading={testingConnection}
-          >
-            测试连接
-          </Button>
+          {authType === 'ssh' ? (
+            <Form.Item
+              name="sshKeyPath"
+              label="SSH 私钥路径"
+              extra="服务器上的私钥文件路径，需对后端进程可读"
+            >
+              <Input className="mono" placeholder="/root/.ssh/id_rsa" />
+            </Form.Item>
+          ) : (
+            <Form.Item
+              name="authToken"
+              label="Access Token"
+              extra={
+                project.hasAuthToken
+                  ? '已配置；留空表示不修改'
+                  : 'GitHub PAT / GitLab Token 等，公开仓库可留空'
+              }
+            >
+              <Input.Password
+                placeholder={project.hasAuthToken ? '••••••••（已配置）' : 'ghp_xxx / glpat-xxx'}
+                autoComplete="new-password"
+              />
+            </Form.Item>
+          )}
+          <Space orientation="vertical" style={{ width: '100%' }}>
+            <Button icon={<ApiOutlined />} onClick={handleTestConnection} loading={testing}>
+              测试连接
+            </Button>
+            {testResult && (
+              <Alert showIcon type={testResult.ok ? 'success' : 'error'} title={testResult.msg} />
+            )}
+          </Space>
         </div>
       ),
     },
     {
       key: 'ci',
-      label: 'CI 配置',
+      label: '构建与上传',
       children: (
-        <div className="config-section">
-          <Form.Item name="privateKey" label="微信 CI 私钥">
-            <Input.TextArea
-              placeholder={project?.hasPrivateKey ? '已配置（不修改请留空）' : '-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----'}
-              rows={10}
-              className="code-textarea"
-              style={{ fontFamily: 'var(--geek-font-mono)', fontSize: 12 }}
+        <div className="form-section">
+          <Form.Item
+            label={
+              <Space>
+                小程序上传密钥
+                {project.hasPrivateKey && (
+                  <Tag color="success" variant="filled" icon={<CheckCircleFilled />}>
+                    已配置
+                  </Tag>
+                )}
+              </Space>
+            }
+            extra={
+              <>
+                在微信公众平台「开发管理 → 开发设置 →
+                小程序代码上传」生成并下载，同时需将本服务器出口 IP 加入白名单。
+                {project.hasPrivateKey && ' 留空表示不修改。'}
+              </>
+            }
+          >
+            <Form.Item name="privateKey" noStyle>
+              <Input.TextArea
+                rows={6}
+                className="mono"
+                placeholder={
+                  project.hasPrivateKey
+                    ? '••••••••（已配置，粘贴新密钥可替换）'
+                    : '-----BEGIN RSA PRIVATE KEY-----\n...'
+                }
+              />
+            </Form.Item>
+            <input
+              type="file"
+              accept=".key,.pem,.txt"
+              ref={fileInput}
+              hidden
+              onChange={handleKeyFile}
             />
+            <Button
+              size="small"
+              icon={<UploadOutlined />}
+              onClick={() => fileInput.current?.click()}
+              style={{ marginTop: 8 }}
+            >
+              从文件读取
+            </Button>
           </Form.Item>
-          <Form.Item
-            name="installCommand"
-            label="依赖安装命令（可选）"
-            extra="留空则用默认 'npm install --legacy-peer-deps'。pnpm/yarn 项目可填写对应命令；遇到 ERESOLVE peer 冲突无法解决时可改为 'npm install --force'"
-          >
-            <Input placeholder="留空使用默认；或 'pnpm install --frozen-lockfile' / 'yarn install'" />
-          </Form.Item>
-          <Form.Item
-            name="buildCommand"
-            label="编译命令（可选）"
-            extra="编译型框架（Taro/uni-app/Vue3）必填，例如 'npm run build:weapp'；原生小程序留空"
-          >
-            <Input placeholder="npm run build:weapp" />
-          </Form.Item>
-          <Form.Item
-            name="miniprogramRoot"
-            label="小程序根目录（可选）"
-            extra="包含 project.config.json 的目录，相对仓库根；Taro 通常为 'dist/weapp'，原生小程序留空"
-          >
-            <Input placeholder="dist/weapp" />
-          </Form.Item>
+
+          <Row gutter={16}>
+            <Col xs={24} md={12}>
+              <Form.Item
+                name="buildCommand"
+                label="编译命令"
+                tooltip="Taro / uni-app 等编译型框架必填；原生小程序留空"
+              >
+                <Input className="mono" placeholder="npm run build:weapp" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item
+                name="miniprogramRoot"
+                label="小程序根目录"
+                tooltip="包含 project.config.json 的目录（相对仓库根），原生小程序留空"
+              >
+                <Input className="mono" placeholder="dist/weapp" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item
+                name="installCommand"
+                label="依赖安装命令"
+                tooltip="留空默认 npm install --legacy-peer-deps"
+              >
+                <Input className="mono" placeholder="pnpm install --frozen-lockfile" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={12}>
+              <Form.Item
+                name="projectPath"
+                label="本地项目路径"
+                tooltip="填写后直接使用服务器上该目录的代码，不再拉取 Git 仓库（一般留空）"
+              >
+                <Input className="mono" placeholder="一般留空" />
+              </Form.Item>
+            </Col>
+          </Row>
           <Form.Item
             name="npmBuild"
             label="构建小程序 npm"
             valuePropName="checked"
-            extra="项目使用了小程序 npm 包时开启，对应微信开发者工具的「构建 npm」"
+            extra="项目使用了小程序 npm 包时开启，等同于开发者工具的「构建 npm」"
           >
             <Switch />
           </Form.Item>
-          <Form.Item name="projectPath" label="本地项目路径（可选）">
-            <Input placeholder="/path/to/local/project" />
-          </Form.Item>
         </div>
       ),
     },
     {
-      key: 'dev',
-      label: 'DEV 环境',
+      key: 'env',
+      label: '环境配置',
       children: (
-        <div className="config-section">
-          <Form.Item name="devRobot" label="机器人编号">
-            <Select
-              options={Array.from({ length: 30 }, (_, i) => ({
-                label: `Robot ${i + 1}`,
-                value: i + 1,
-              }))}
-            />
-          </Form.Item>
-          <Form.Item name="devEs6" label="ES6 转 ES5" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-          <Form.Item name="devEs7" label="增强编译" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-          <Form.Item name="devMinify" label="代码压缩" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-        </div>
-      ),
-    },
-    {
-      key: 'prod',
-      label: 'PROD 环境',
-      children: (
-        <div className="config-section">
-          <Form.Item name="prodRobot" label="机器人编号">
-            <Select
-              options={Array.from({ length: 30 }, (_, i) => ({
-                label: `Robot ${i + 1}`,
-                value: i + 1,
-              }))}
-            />
-          </Form.Item>
-          <Form.Item name="prodEs6" label="ES6 转 ES5" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-          <Form.Item name="prodEs7" label="增强编译" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-          <Form.Item name="prodMinify" label="代码压缩" valuePropName="checked">
-            <Switch />
-          </Form.Item>
-        </div>
+        <Row gutter={[16, 16]}>
+          <Col xs={24} md={12}>
+            <EnvSection env="dev" />
+          </Col>
+          <Col xs={24} md={12}>
+            <EnvSection env="prod" />
+          </Col>
+        </Row>
       ),
     },
   ]
 
   return (
-    <div className="project-config-page">
-      <div className="page-header">
-        <div className="header-title">
-          <span className="prompt">$</span>
-          <h1>项目配置</h1>
-          <code className="project-id">{project.name}</code>
-        </div>
-        <div className="header-actions">
-          <Button className="geek-button-outline" onClick={() => navigate('/projects')}>
-            返回
-          </Button>
+    <div className="page">
+      <PageHeader
+        back={
           <Button
-            type="primary"
-            icon={<SaveOutlined />}
-            className="geek-button"
-            onClick={handleSave}
-            loading={loading}
-          >
-            保存配置
-          </Button>
-        </div>
-      </div>
+            type="text"
+            icon={<ArrowLeftOutlined />}
+            onClick={() => navigate('/projects')}
+            aria-label="返回"
+          />
+        }
+        title={project.name}
+        description={<code className="mono">{project.appId}</code>}
+        extra={
+          <Space>
+            {dirty && <span className="muted">有未保存的修改</span>}
+            <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
+              保存
+            </Button>
+          </Space>
+        }
+      />
 
-      <Card className="geek-card config-card">
-        <Form form={form} layout="vertical" className="geek-form">
-          <Tabs items={tabItems} className="geek-tabs" />
+      {issues.length > 0 && (
+        <Alert
+          type="warning"
+          showIcon
+          className="section"
+          title="完成以下配置后才能成功构建"
+          description={
+            <ul className="issue-list">
+              {issues.map((i) => (
+                <li key={i.text}>
+                  {i.text}
+                  <Button
+                    type="link"
+                    size="small"
+                    onClick={() => setParams({ tab: i.tab }, { replace: true })}
+                  >
+                    去配置
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          }
+        />
+      )}
+
+      <Card variant="borderless">
+        <Form form={form} layout="vertical" onValuesChange={() => setDirty(true)}>
+          <Tabs
+            activeKey={activeTab}
+            onChange={(key) => setParams({ tab: key }, { replace: true })}
+            items={tabItems.map((t) => ({ ...t, forceRender: true }))}
+          />
         </Form>
       </Card>
     </div>

@@ -1,389 +1,400 @@
-import React, { useEffect, useState, useCallback } from 'react'
-import {
-  Card,
-  Button,
-  Table,
-  Tag,
-  Space,
-  Modal,
-  Form,
-  Input,
-  Select,
-  message,
-  Popconfirm,
-  Tooltip,
-} from 'antd'
+import React, { useEffect, useMemo, useState } from 'react'
+import { Card, Button, Table, Space, Input, Select, Segmented, Tooltip, Dropdown, App } from 'antd'
 import type { ColumnsType } from 'antd/es/table'
 import {
   PlusOutlined,
-  RocketOutlined,
   PlayCircleOutlined,
+  FileTextOutlined,
+  MoreOutlined,
+  SearchOutlined,
+  BranchesOutlined,
+  QrcodeOutlined,
   StopOutlined,
+  UndoOutlined,
   DeleteOutlined,
-  SyncOutlined,
-  CheckCircleOutlined,
-  ClockCircleOutlined,
-  EyeOutlined,
+  ExclamationCircleFilled,
 } from '@ant-design/icons'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { useIterationStore } from '@stores/iterationStore'
 import { useProjectStore } from '@stores/projectStore'
-import type { Iteration, IterationStatus, EnvironmentType } from '@/types'
-import dayjs from 'dayjs'
+import api, { getErrorMessage } from '@services/serverApi'
+import PageHeader from '@components/common/PageHeader'
+import { BuildStatusTag, EnvTag, IterationStatusTag } from '@components/common/StatusTag'
+import { fromNow } from '@/constants/status'
+import type { Iteration, BuildRecord } from '@/types'
 import BuildDrawer from './BuildDrawer'
-import './Iterations.less'
+import CreateIterationModal from './CreateIterationModal'
 
-const statusConfig: Record<
-  IterationStatus,
-  { color: string; icon: React.ReactNode; text: string }
-> = {
-  active: { color: '#3fb950', icon: <CheckCircleOutlined />, text: 'ACTIVE' },
-  building: { color: '#58a6ff', icon: <SyncOutlined spin />, text: 'BUILDING' },
-  closed: { color: '#8b949e', icon: <ClockCircleOutlined />, text: 'CLOSED' },
-}
+type StatusFilter = 'open' | 'all' | 'closed'
 
 const Iterations: React.FC = () => {
+  const navigate = useNavigate()
+  const { message, modal } = App.useApp()
+  const [params, setParams] = useSearchParams()
   const {
     iterations,
-    branches,
     loading,
-    fetchingBranches,
     fetchIterations,
-    createIteration,
     closeIteration,
+    reopenIteration,
     deleteIteration,
     triggerBuild,
-    fetchBranches,
   } = useIterationStore()
   const { projects, fetchProjects } = useProjectStore()
-  const [modalOpen, setModalOpen] = useState(false)
-  const [form] = Form.useForm()
-  const [selectedProjectId, setSelectedProjectId] = useState<string>('')
-  const [drawerBuildId, setDrawerBuildId] = useState<string | null>(null)
-  const [drawerProjectId, setDrawerProjectId] = useState<string | null>(null)
-  const [drawerOpen, setDrawerOpen] = useState(false)
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('open')
+  const [keyword, setKeyword] = useState('')
+  const [drawer, setDrawer] = useState<{
+    buildId: string
+    projectId: string
+    title: string
+  } | null>(null)
+  const [busyId, setBusyId] = useState<string | null>(null)
+
+  const projectFilter = params.get('projectId') || undefined
+  const createOpen = params.get('create') === '1'
 
   useEffect(() => {
     fetchIterations()
     fetchProjects()
   }, [fetchIterations, fetchProjects])
 
-  const handleProjectChange = useCallback(
-    (projectId: string) => {
-      setSelectedProjectId(projectId)
-      form.setFieldValue('branch', undefined)
-      fetchBranches(projectId)
-    },
-    [form, fetchBranches],
-  )
+  const hasBuilding = iterations.some((i) => i.status === 'building')
+  useEffect(() => {
+    if (!hasBuilding) return
+    const timer = setInterval(() => fetchIterations({ silent: true }), 4000)
+    return () => clearInterval(timer)
+  }, [hasBuilding, fetchIterations])
 
-  const handleCreate = useCallback(async () => {
+  const updateParams = (patch: Record<string, string | undefined>) => {
+    const next = new URLSearchParams(params)
+    Object.entries(patch).forEach(([k, v]) => (v ? next.set(k, v) : next.delete(k)))
+    setParams(next, { replace: true })
+  }
+
+  const filtered = useMemo(() => {
+    const kw = keyword.trim().toLowerCase()
+    return iterations.filter((i) => {
+      if (projectFilter && i.projectId !== projectFilter) return false
+      if (statusFilter === 'open' && i.status === 'closed') return false
+      if (statusFilter === 'closed' && i.status !== 'closed') return false
+      if (
+        kw &&
+        ![i.name, i.version, i.branch, i.description].some((v) => v?.toLowerCase().includes(kw))
+      )
+        return false
+      return true
+    })
+  }, [iterations, projectFilter, statusFilter, keyword])
+
+  const openDrawer = (iter: Iteration, buildId = iter.buildId) => {
+    if (!buildId) return
+    setDrawer({
+      buildId,
+      projectId: iter.projectId,
+      title: `${iter.projectName} · v${iter.version}`,
+    })
+  }
+
+  const runBuild = async (iter: Iteration) => {
+    setBusyId(iter.id)
     try {
-      const values = await form.validateFields()
-      await createIteration({
-        projectId: values.projectId,
-        name: values.name,
-        description: values.description,
-        branch: values.branch,
-        version: values.version,
-        environment: values.environment,
-      })
-      message.success('迭代创建成功')
-      setModalOpen(false)
-      form.resetFields()
-      setSelectedProjectId('')
-    } catch {
-      /* 表单校验失败 */
+      const build = await triggerBuild(iter.id)
+      message.success('已加入构建队列')
+      openDrawer(iter, build.id)
+    } catch (err) {
+      message.error(getErrorMessage(err, '构建触发失败'))
+    } finally {
+      setBusyId(null)
     }
-  }, [form, createIteration])
+  }
 
-  const handleTriggerBuild = useCallback(
-    async (iter: Iteration) => {
-      try {
-        const buildId = await triggerBuild(iter.id)
-        setDrawerBuildId(buildId)
-        setDrawerProjectId(iter.projectId)
-        setDrawerOpen(true)
-      } catch {
-        message.error('构建触发失败')
-      }
-    },
-    [triggerBuild],
-  )
+  const handleBuild = (iter: Iteration) => {
+    if (iter.environment !== 'prod') {
+      runBuild(iter)
+      return
+    }
+    modal.confirm({
+      title: `构建并上传正式版 v${iter.version}？`,
+      icon: <ExclamationCircleFilled />,
+      content: `将使用分支 ${iter.branch} 构建，并以 PROD 机器人上传到「${iter.projectName}」。上传后仍需在微信后台提交审核才会发布。`,
+      okText: '开始构建',
+      cancelText: '取消',
+      onOk: () => runBuild(iter),
+    })
+  }
 
-  /**
-   * 关闭后再次打开抽屉，查看该迭代当前 / 最近一次构建的日志。
-   * 与"触发构建"等价的入口：用 iteration.buildId 复用同一个抽屉。
-   */
-  const handleViewLogs = useCallback((iter: Iteration) => {
+  const handlePreview = async (iter: Iteration) => {
     if (!iter.buildId) return
-    setDrawerBuildId(iter.buildId)
-    setDrawerProjectId(iter.projectId)
-    setDrawerOpen(true)
-  }, [])
+    try {
+      const { data } = await api.post<BuildRecord>(`/builds/${iter.buildId}/preview`, {})
+      message.success('预览构建已加入队列，完成后可在构建页查看二维码')
+      openDrawer(iter, data.id)
+    } catch (err) {
+      message.error(getErrorMessage(err, '预览触发失败'))
+    }
+  }
 
-  const handleClose = useCallback(
-    async (id: string) => {
-      await closeIteration(id)
-      message.success('迭代已关闭')
-    },
-    [closeIteration],
-  )
+  const withFeedback = async (fn: () => Promise<void>, ok: string) => {
+    try {
+      await fn()
+      message.success(ok)
+    } catch (err) {
+      message.error(getErrorMessage(err))
+    }
+  }
 
-  const handleDelete = useCallback(
-    async (id: string) => {
-      await deleteIteration(id)
-      message.success('迭代已删除')
-    },
-    [deleteIteration],
-  )
+  const confirmDelete = (iter: Iteration) =>
+    modal.confirm({
+      title: `删除迭代「${iter.name}」？`,
+      content: '迭代删除后不可恢复，已有的构建记录会保留。',
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: () => withFeedback(() => deleteIteration(iter.id), '迭代已删除'),
+    })
 
-  // 列宽 + ellipsis + 操作列 fixed:
-  // 配合 Table.scroll.x = 'max-content' 实现宽度自适应
   const columns: ColumnsType<Iteration> = [
     {
-      title: '迭代名称',
+      title: '迭代',
       dataIndex: 'name',
-      key: 'name',
       width: 240,
-      // 名称列含多行描述，不启用 ellipsis（否则描述会被强制截断为单行）
-      render: (text: string, record: Iteration) => (
-        <div className="iter-name-cell">
-          <RocketOutlined style={{ color: 'var(--geek-accent-purple)', marginRight: 8 }} />
-          <div className="iter-name-content">
-            <div className="name-text">{text}</div>
-            {record.description && <div className="desc-text">{record.description}</div>}
+      render: (_, it) => (
+        <div className="cell-primary">
+          <span className="cell-primary__title">{it.name}</span>
+          <div className="cell-primary__sub">
+            {it.projectName}
+            {it.description ? ` · ${it.description}` : ''}
           </div>
         </div>
       ),
     },
     {
-      title: '所属项目',
-      dataIndex: 'projectName',
-      key: 'projectName',
-      width: 160,
-      ellipsis: { showTitle: false },
-      render: (text: string) => (
-        <Tooltip title={text} placement="topLeft">
-          <span className="project-text">{text}</span>
-        </Tooltip>
-      ),
-    },
-    {
       title: '版本',
       dataIndex: 'version',
-      key: 'version',
-      width: 110,
-      render: (text: string) => <code className="code-cell">{text}</code>,
+      width: 150,
+      render: (v: string, it) => (
+        <Space size={6}>
+          <code className="mono">v{v}</code>
+          <EnvTag env={it.environment} short />
+        </Space>
+      ),
     },
     {
       title: '分支',
       dataIndex: 'branch',
-      key: 'branch',
-      width: 160,
+      width: 170,
       ellipsis: { showTitle: false },
-      render: (text: string) => (
-        <Tooltip title={text} placement="topLeft">
-          <code className="code-cell branch">{text}</code>
+      render: (v: string) => (
+        <Tooltip title={v} placement="topLeft">
+          <span className="mono cell-ellipsis">
+            <BranchesOutlined /> {v}
+          </span>
         </Tooltip>
       ),
     },
     {
-      title: '环境',
-      dataIndex: 'environment',
-      key: 'environment',
-      width: 100,
-      render: (env: EnvironmentType) => (
-        <Tag className={`env-tag ${env}`}>{env.toUpperCase()}</Tag>
-      ),
+      title: '最近构建',
+      key: 'lastBuild',
+      width: 170,
+      render: (_, it) =>
+        it.buildId ? (
+          <button type="button" className="link-button" onClick={() => openDrawer(it)}>
+            <BuildStatusTag status={it.lastBuildStatus} />
+            <span className="muted">{fromNow(it.lastBuildStart)}</span>
+          </button>
+        ) : (
+          <span className="muted">未构建</span>
+        ),
     },
     {
       title: '状态',
       dataIndex: 'status',
-      key: 'status',
-      width: 140,
-      render: (status: IterationStatus) => {
-        const config = statusConfig[status]
-        return (
-          <Tag
-            className="status-tag"
-            style={{ color: config.color, borderColor: config.color }}
-          >
-            {config.icon} {config.text}
-          </Tag>
-        )
-      },
-    },
-    {
-      title: '创建时间',
-      dataIndex: 'createdAt',
-      key: 'createdAt',
-      width: 170,
-      render: (text: string) => (
-        <span className="time-cell">{dayjs(text).format('YYYY-MM-DD HH:mm')}</span>
-      ),
+      width: 100,
+      render: (s: string) => <IterationStatusTag status={s} />,
     },
     {
       title: '操作',
       key: 'actions',
-      width: 180,
-      align: 'center',
+      width: 170,
       fixed: 'right',
-      render: (_: unknown, record: Iteration) => (
-        <Space>
-          {record.status === 'active' && (
-            <Tooltip title="触发构建">
-              <Button
-                type="text"
-                icon={<PlayCircleOutlined />}
-                className="action-btn build"
-                onClick={() => handleTriggerBuild(record)}
-              />
-            </Tooltip>
+      render: (_, it) => (
+        <Space size={4}>
+          {it.status === 'building' ? (
+            <Button size="small" icon={<FileTextOutlined />} onClick={() => openDrawer(it)}>
+              查看进度
+            </Button>
+          ) : it.status === 'active' ? (
+            <Button
+              size="small"
+              type="primary"
+              ghost
+              icon={<PlayCircleOutlined />}
+              loading={busyId === it.id}
+              onClick={() => handleBuild(it)}
+            >
+              {it.buildId ? '重新构建' : '构建'}
+            </Button>
+          ) : (
+            <Button
+              size="small"
+              icon={<UndoOutlined />}
+              onClick={() => withFeedback(() => reopenIteration(it.id), '迭代已重新打开')}
+            >
+              重新打开
+            </Button>
           )}
-          {/* 只要这条迭代曾经触发过构建（无论成功/失败/进行中），都允许重新打开抽屉
-              查看日志：解决了之前关闭抽屉后只能去构建历史才能再看日志的问题 */}
-          {record.buildId && (
-            <Tooltip title="查看构建日志">
-              <Button
-                type="text"
-                icon={<EyeOutlined />}
-                className="action-btn"
-                onClick={() => handleViewLogs(record)}
-              />
-            </Tooltip>
-          )}
-          {record.status === 'active' && (
-            <Tooltip title="关闭迭代">
-              <Button
-                type="text"
-                icon={<StopOutlined />}
-                className="action-btn"
-                onClick={() => handleClose(record.id)}
-              />
-            </Tooltip>
-          )}
-          <Popconfirm
-            title="确定删除此迭代？"
-            onConfirm={() => handleDelete(record.id)}
-            okText="确定"
-            cancelText="取消"
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: [
+                {
+                  key: 'logs',
+                  icon: <FileTextOutlined />,
+                  label: '构建日志',
+                  disabled: !it.buildId,
+                  onClick: () => openDrawer(it),
+                },
+                {
+                  key: 'preview',
+                  icon: <QrcodeOutlined />,
+                  label: '生成预览二维码',
+                  disabled: !it.buildId || it.status === 'building',
+                  onClick: () => handlePreview(it),
+                },
+                {
+                  key: 'history',
+                  label: '该项目构建记录',
+                  onClick: () => navigate(`/builds?projectId=${it.projectId}`),
+                },
+                { type: 'divider' },
+                it.status === 'closed'
+                  ? {
+                      key: 'reopen',
+                      icon: <UndoOutlined />,
+                      label: '重新打开',
+                      onClick: () => withFeedback(() => reopenIteration(it.id), '迭代已重新打开'),
+                    }
+                  : {
+                      key: 'close',
+                      icon: <StopOutlined />,
+                      label: '关闭迭代',
+                      disabled: it.status === 'building',
+                      onClick: () => withFeedback(() => closeIteration(it.id), '迭代已关闭'),
+                    },
+                {
+                  key: 'delete',
+                  icon: <DeleteOutlined />,
+                  label: '删除',
+                  danger: true,
+                  disabled: it.status === 'building',
+                  onClick: () => confirmDelete(it),
+                },
+              ],
+            }}
           >
-            <Tooltip title="删除">
-              <Button type="text" icon={<DeleteOutlined />} className="action-btn danger" />
-            </Tooltip>
-          </Popconfirm>
+            <Button size="small" type="text" icon={<MoreOutlined />} aria-label="更多操作" />
+          </Dropdown>
         </Space>
       ),
     },
   ]
 
   return (
-    <div className="iterations-page">
-      <div className="page-header">
-        <div className="header-title">
-          <span className="prompt">$</span>
-          <h1>迭代管理</h1>
-          <span className="cursor-blink">{'\u2588'}</span>
-        </div>
-        <Button
-          type="primary"
-          icon={<PlusOutlined />}
-          className="geek-button"
-          onClick={() => setModalOpen(true)}
-        >
-          新建迭代
-        </Button>
-      </div>
+    <div className="page">
+      <PageHeader
+        title="迭代发布"
+        description="每个迭代锁定一个分支、版本号和目标环境，可反复构建直到满意后关闭。"
+        extra={
+          <Button
+            type="primary"
+            icon={<PlusOutlined />}
+            onClick={() => updateParams({ create: '1' })}
+            disabled={projects.length === 0}
+          >
+            发布新版本
+          </Button>
+        }
+      />
 
-      <Card className="geek-card table-card">
+      <Card variant="borderless" className="table-card">
+        <div className="table-toolbar">
+          <Segmented
+            value={statusFilter}
+            onChange={(v) => setStatusFilter(v as StatusFilter)}
+            options={[
+              { label: '进行中', value: 'open' },
+              { label: '已关闭', value: 'closed' },
+              { label: '全部', value: 'all' },
+            ]}
+          />
+          <Select
+            allowClear
+            placeholder="全部项目"
+            value={projectFilter}
+            onChange={(v) => updateParams({ projectId: v })}
+            options={projects.map((p) => ({ label: p.name, value: p.id }))}
+            className="table-toolbar__select"
+          />
+          <Input
+            allowClear
+            prefix={<SearchOutlined />}
+            placeholder="搜索名称 / 版本 / 分支"
+            value={keyword}
+            onChange={(e) => setKeyword(e.target.value)}
+            className="table-toolbar__search"
+          />
+        </div>
         <Table
           columns={columns}
-          dataSource={iterations}
+          dataSource={filtered}
           rowKey="id"
           loading={loading}
-          pagination={false}
-          className="geek-table"
-          // 按列宽计算横向滚动阈值，窄屏滚动而非挤压
+          pagination={filtered.length > 20 ? { pageSize: 20, showSizeChanger: false } : false}
           scroll={{ x: 'max-content' }}
+          locale={{
+            emptyText:
+              projects.length === 0 ? (
+                <div className="table-empty">
+                  <p>先创建一个项目，才能发布版本</p>
+                  <Button type="primary" onClick={() => navigate('/projects?create=1')}>
+                    新建项目
+                  </Button>
+                </div>
+              ) : iterations.length === 0 ? (
+                <div className="table-empty">
+                  <p>还没有迭代</p>
+                  <Button type="primary" onClick={() => updateParams({ create: '1' })}>
+                    发布新版本
+                  </Button>
+                </div>
+              ) : (
+                '没有符合条件的迭代'
+              ),
+          }}
         />
       </Card>
 
-      <Modal
-        title="新建迭代"
-        open={modalOpen}
-        onOk={handleCreate}
-        onCancel={() => {
-          setModalOpen(false)
-          form.resetFields()
-          setSelectedProjectId('')
+      <CreateIterationModal
+        open={createOpen}
+        defaultProjectId={projectFilter}
+        onClose={() => updateParams({ create: undefined })}
+        onCreated={(iter, buildNow) => {
+          updateParams({ create: undefined })
+          setStatusFilter('open')
+          if (buildNow) runBuild(iter)
+          else message.success('迭代已创建')
         }}
-        okText="创建"
-        cancelText="取消"
-        className="geek-modal"
-        width={600}
-      >
-        <Form form={form} layout="vertical" className="geek-form">
-          <Form.Item
-            name="projectId"
-            label="所属项目"
-            rules={[{ required: true, message: '请选择项目' }]}
-          >
-            <Select
-              placeholder="请选择项目"
-              onChange={handleProjectChange}
-              options={projects.map((p) => ({ label: p.name, value: p.id }))}
-            />
-          </Form.Item>
-          <Form.Item
-            name="name"
-            label="迭代名称"
-            rules={[{ required: true, message: '请输入迭代名称' }]}
-          >
-            <Input placeholder="例如：v1.0.0 首页重构" />
-          </Form.Item>
-          <Form.Item name="description" label="迭代描述">
-            <Input.TextArea placeholder="描述本次迭代的主要内容" rows={2} />
-          </Form.Item>
-          <Form.Item
-            name="branch"
-            label="分支"
-            rules={[{ required: true, message: '请选择分支' }]}
-          >
-            <Select
-              placeholder={selectedProjectId ? '请选择分支' : '请先选择项目'}
-              loading={fetchingBranches}
-              disabled={!selectedProjectId}
-              options={branches.map((b) => ({ label: b, value: b }))}
-            />
-          </Form.Item>
-          <Form.Item
-            name="version"
-            label="版本号"
-            rules={[{ required: true, message: '请输入版本号' }]}
-          >
-            <Input placeholder="例如：1.0.0" />
-          </Form.Item>
-          <Form.Item
-            name="environment"
-            label="目标环境"
-            rules={[{ required: true, message: '请选择环境' }]}
-          >
-            <Select
-              placeholder="请选择环境"
-              options={[
-                { label: 'DEV (开发环境)', value: 'dev' as EnvironmentType },
-                { label: 'PROD (生产环境)', value: 'prod' as EnvironmentType },
-              ]}
-            />
-          </Form.Item>
-        </Form>
-      </Modal>
+      />
 
       <BuildDrawer
-        buildId={drawerBuildId}
-        projectId={drawerProjectId || undefined}
-        visible={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
+        open={!!drawer}
+        buildId={drawer?.buildId || null}
+        projectId={drawer?.projectId}
+        title={drawer?.title}
+        onClose={() => {
+          setDrawer(null)
+          fetchIterations({ silent: true })
+        }}
       />
     </div>
   )

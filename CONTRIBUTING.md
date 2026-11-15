@@ -26,7 +26,7 @@ pnpm dev:server   # 后端 tsx watch
 
 - 前端：http://localhost:5173
 - 后端：http://localhost:8080
-- 默认管理员：`admin / admin123`
+- 初始管理员：`admin`，密码打印在后端首次启动日志中（或用 `INITIAL_ADMIN_PASSWORD` 指定）
 
 ## 项目结构
 

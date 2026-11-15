@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3'
 import { encryptSecret } from '../utils/secretVault.js'
+import { parseProjectEnvironments } from '../mappers/projectMapper.js'
 import {
   DEFAULT_ENVIRONMENTS,
   encryptEnvironmentSecrets,
@@ -17,6 +18,7 @@ export interface CreateProjectInput {
   authToken?: string
   environments?: any
   projectPath?: string
+  sshKeyPath?: string
   now: string
 }
 
@@ -30,7 +32,29 @@ export interface UpdateProjectInput {
   authToken?: string
   environments?: any
   projectPath?: string
+  sshKeyPath?: string
   now: string
+}
+
+function isPlainObject(v: unknown): v is Record<string, any> {
+  return !!v && typeof v === 'object' && !Array.isArray(v)
+}
+
+/** 深合并 environments；值为 undefined 的字段保留旧值，null / '' 视为显式清空 */
+export function mergeEnvironments(base: Record<string, any>, patch: Record<string, any>): Record<string, any> {
+  const result: Record<string, any> = { ...base }
+  if (!isPlainObject(patch)) return result
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) continue
+    if (isPlainObject(value) && isPlainObject(result[key])) {
+      result[key] = mergeEnvironments(result[key], value)
+    } else if (value === null) {
+      delete result[key]
+    } else {
+      result[key] = value
+    }
+  }
+  return result
 }
 
 export function listProjects(db: Database.Database): ProjectRow[] {
@@ -47,8 +71,8 @@ export function createProject(db: Database.Database, input: CreateProjectInput):
     : DEFAULT_ENVIRONMENTS
 
   db.prepare(`
-    INSERT INTO projects (id, name, description, app_id, repo_url, branch, auth_type, auth_token, project_path, environments, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO projects (id, name, description, app_id, repo_url, branch, auth_type, auth_token, ssh_key_path, project_path, environments, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     input.id,
     input.name,
@@ -58,6 +82,7 @@ export function createProject(db: Database.Database, input: CreateProjectInput):
     input.branch || 'main',
     input.authType || 'token',
     encryptSecret(input.authToken || ''),
+    input.sshKeyPath || '',
     input.projectPath || '',
     envs,
     input.now,
@@ -82,8 +107,14 @@ export function updateProject(
   if (input.authType !== undefined) updates.auth_type = input.authType
   if (input.authToken !== undefined) updates.auth_token = encryptSecret(input.authToken)
   if (input.projectPath !== undefined) updates.project_path = input.projectPath
+  if (input.sshKeyPath !== undefined) updates.ssh_key_path = input.sshKeyPath
   if (input.environments !== undefined) {
-    updates.environments = encryptEnvironmentSecrets(input.environments, existing.environments)
+    // 与已有配置做合并而不是整体替换：前端只提交部分字段（或旧客户端缺字段）时，
+    // 不会把 buildCommand / miniprogramRoot / robot 等未提交的配置清空。
+    updates.environments = encryptEnvironmentSecrets(
+      mergeEnvironments(parseProjectEnvironments(existing.environments), input.environments),
+      existing.environments
+    )
   }
 
   const setClauses = Object.keys(updates).map((key) => `${key} = ?`).join(', ')
