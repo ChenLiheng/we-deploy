@@ -27,12 +27,13 @@
 ## 3. 本地开发与验证命令
 
 - 前后端联调：`pnpm dev:all`
+- 代码检查（前后端）：`pnpm lint`（oxlint，配置见 `.oxlintrc.json`）
 - 前端类型检查：`pnpm type-check`
 - 后端类型检查：`pnpm --dir server type-check`
 - 前端构建：`pnpm build`
 - 后端构建：`pnpm --dir server build`
 
-改动后至少执行受影响端的 type-check；涉及构建链路时建议前后端都跑一遍。
+改动后至少执行 `pnpm lint` 与受影响端的 type-check；涉及构建链路时建议前后端都跑一遍。
 
 ## 4. 修改优先级与边界
 

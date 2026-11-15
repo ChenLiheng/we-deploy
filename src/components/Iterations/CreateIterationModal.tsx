@@ -23,10 +23,17 @@ const CreateIterationModal: React.FC<Props> = ({ open, defaultProjectId, onClose
   const createIteration = useIterationStore((s) => s.createIteration)
   const [form] = Form.useForm()
   const [saving, setSaving] = useState(false)
-  const [branches, setBranches] = useState<string[]>([])
-  const [branchError, setBranchError] = useState<string>()
-  const [loadingBranches, setLoadingBranches] = useState(false)
+  // 记录"哪个项目"的分支结果：加载状态由此推导，effect 中只在异步回调里 setState
+  const [branchResult, setBranchResult] = useState<{
+    projectId: string
+    branches: string[]
+    error?: string
+  } | null>(null)
   const projectId = Form.useWatch('projectId', form) as string | undefined
+  const current = branchResult && branchResult.projectId === projectId ? branchResult : null
+  const branches = current?.branches ?? []
+  const branchError = current?.error
+  const loadingBranches = open && !!projectId && !current
   const buildNow = Form.useWatch('buildNow', form) as boolean | undefined
   const environment = Form.useWatch('environment', form) as EnvironmentType | undefined
 
@@ -45,18 +52,15 @@ const CreateIterationModal: React.FC<Props> = ({ open, defaultProjectId, onClose
     if (!form.isFieldTouched('branch')) form.setFieldValue('branch', project.branch || 'main')
 
     let cancelled = false
-    setLoadingBranches(true)
-    setBranchError(undefined)
-    setBranches([])
     gitService
       .fetchBranches({ repoUrl: project.repoUrl, authType: project.authType, projectId })
       .then((res) => {
-        if (cancelled) return
-        setBranches(res.branches)
-        if (res.error) setBranchError(res.error)
+        if (!cancelled) setBranchResult({ projectId, branches: res.branches, error: res.error })
       })
-      .catch((err) => !cancelled && setBranchError(getErrorMessage(err, '分支获取失败')))
-      .finally(() => !cancelled && setLoadingBranches(false))
+      .catch((err) => {
+        if (!cancelled)
+          setBranchResult({ projectId, branches: [], error: getErrorMessage(err, '分支获取失败') })
+      })
     return () => {
       cancelled = true
     }

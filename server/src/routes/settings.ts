@@ -4,6 +4,7 @@ import { requireAdmin } from '../middleware/auth.js'
 import { getLogRetentionDays } from '../services/buildRetention.js'
 import { getBuildQueueSnapshot } from '../services/buildQueue.js'
 import { sendWebhookMarkdown } from '../services/notifications.js'
+import { asyncHandler } from '../utils/asyncHandler.js'
 import { isSettingKey, readSettings, validateWebhookUrl } from '../services/settingsStore.js'
 
 const router = Router()
@@ -60,7 +61,7 @@ router.put('/', requireAdmin, (req: Request, res: Response) => {
 })
 
 // POST /api/settings/test-webhook —— 发送一条测试消息，帮助用户确认机器人地址可用
-router.post('/test-webhook', requireAdmin, async (req: Request, res: Response) => {
+router.post('/test-webhook', requireAdmin, asyncHandler(async (req: Request, res: Response) => {
   const url = String(req.body?.webhookUrl || readSettings(getDb()).webhookUrl || '').trim()
   if (!url) {
     res.status(400).json({ error: '请先填写 Webhook 地址' })
@@ -77,6 +78,6 @@ router.post('/test-webhook', requireAdmin, async (req: Request, res: Response) =
   } catch (e: any) {
     res.status(502).json({ error: e?.message || '发送失败' })
   }
-})
+}))
 
 export default router
