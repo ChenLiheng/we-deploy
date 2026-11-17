@@ -54,7 +54,7 @@ we-deploy/
 ## 编码规范
 
 - **TypeScript 优先**：新代码必须使用 TypeScript，避免 `any`。
-- **格式化**：提交前请运行 `pnpm format`（Prettier）和 `pnpm lint`（ESLint --fix）。
+- **格式化**：提交前请运行 `pnpm format`（Prettier）和 `pnpm lint`（oxlint，覆盖前端 `src/` 与后端 `server/src/`；可自动修复的问题用 `pnpm lint:fix`）。
 - **类型检查**：`pnpm type-check` 必须通过。
 - **注释语言**：注释统一使用中文 UTF-8。
 - **命名约定**：

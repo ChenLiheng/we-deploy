@@ -56,10 +56,12 @@ const LogViewer: React.FC<LogViewerProps> = ({
     [logs],
   )
 
+  // 可见日志变化时（新日志 / 切换筛选）且处于跟随模式，滚动到底部
+  const visibleCount = visible.length
   useEffect(() => {
     const el = bodyRef.current
-    if (follow && el) el.scrollTop = el.scrollHeight
-  }, [visible, follow])
+    if (follow && el && visibleCount > 0) el.scrollTop = el.scrollHeight
+  }, [visibleCount, follow])
 
   const handleScroll = () => {
     const el = bodyRef.current

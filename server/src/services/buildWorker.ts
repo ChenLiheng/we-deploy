@@ -302,6 +302,8 @@ async function prepareCode(
     // 6. clone 失败也要清掉刚刚 mkdirSync 出来的空目录，避免遗留
     safeRemoveDir(sandboxRoot)
     const message = redactCredentials(String(err?.message || err))
+    // 不附带原始 error 作为 cause：原始信息里可能包含带 token 的仓库地址，这里只保留脱敏后的信息
+    // oxlint-disable-next-line preserve-caught-error
     throw new Error(`Git 克隆失败 (分支 ${targetBranch}): ${message}`)
   }
 }

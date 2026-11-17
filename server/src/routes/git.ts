@@ -7,6 +7,7 @@ import {
   redactCredentials,
 } from '../utils/gitAuth.js'
 import { decryptSecret } from '../utils/secretVault.js'
+import { asyncHandler } from '../utils/asyncHandler.js'
 
 const router = Router()
 
@@ -61,7 +62,7 @@ function toGitErrorMessage(err: any): string {
 }
 
 // POST /api/git/test-connection
-router.post('/test-connection', async (req: Request, res: Response) => {
+router.post('/test-connection', asyncHandler(async (req: Request, res: Response) => {
   const { repoUrl, authType } = req.body
   const sshKeyPath = getSshKeyPath(req)
 
@@ -82,10 +83,10 @@ router.post('/test-connection', async (req: Request, res: Response) => {
   } catch (err: any) {
     res.json({ success: false, error: toGitErrorMessage(err) })
   }
-})
+}))
 
 // POST /api/git/branches
-router.post('/branches', async (req: Request, res: Response) => {
+router.post('/branches', asyncHandler(async (req: Request, res: Response) => {
   const { repoUrl, authType } = req.body
   const sshKeyPath = getSshKeyPath(req)
 
@@ -114,6 +115,6 @@ router.post('/branches', async (req: Request, res: Response) => {
     // 返回可读的错误原因，前端据此提示用户并允许手动输入分支名
     res.json({ branches: [], error: toGitErrorMessage(err) })
   }
-})
+}))
 
 export default router
